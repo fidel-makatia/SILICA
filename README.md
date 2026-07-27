@@ -73,6 +73,8 @@ happened — see `spec/invariants.md` for the bug-to-principle map. Highlights:
 
 ## Repo layout
 
+- `docs/ARCHITECTURE.md` — system design: the determinism boundary, where an
+  LLM sits (and doesn't), layer diagrams, backend protocol
 - `spec/SPEC.md` — language definition (types, semantics, error model)
 - `spec/grammar.ebnf` — surface grammar
 - `spec/invariants.md` — the standard invariant library + field bug map
