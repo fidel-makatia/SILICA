@@ -87,6 +87,19 @@ except Counterexample as ce:
 it = run('let ok = assert_map_total("t.map", ["M1", "M2", "VIA1"])\n')
 check("total map passes", it.genv.get("ok") is True)
 
+# 9b. layer.kind rows: a map with no NAME (pin-text) rows is caught
+# (the bug that made 18 consecutive real LVS runs INCORRECT: Ports 0 vs 395)
+try:
+    run('assert_map_total("t.map", ["M1", "M1.NAME"])\n')
+    check("missing NAME rows halt", False)
+except Counterexample as ce:
+    check("missing NAME rows halt", ce.data["rule"] == "unmapped-layer"
+          and "M1.NAME" in ce.data["note"])
+with open("t.map", "a") as f:
+    f.write("M1 NAME 131 0\n")
+it = run('let ok2 = assert_map_total("t.map", ["M1", "M1.NAME"])\n')
+check("NAME rows pass", it.genv.get("ok2") is True)
+
 # 10. without --flow capability, step() is undefined
 it2 = Interp(Parser(lex('let x = 1\n')).parse())
 try:

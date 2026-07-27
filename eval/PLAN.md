@@ -9,7 +9,7 @@ machine-readable counterexamples.
 
 ## Benchmark: the harvester padframe campaign (ground truth exists)
 
-The 2026-06/07 commercial-40nm harvester campaign is fully logged: 40+ Calibre rounds
+The 2026-06/07 40nm harvester campaign is fully logged: 40+ Calibre rounds
 core + 11 rounds padframe, every script and every DRC results-DB retained
 (`~/HARVESTER_SOC/flow/`, olympus `harvester/signoff_chip/`). That gives an
 exact per-round record of (a) the edit attempted, (b) the failure Calibre

@@ -1,5 +1,5 @@
 // SILICA v0.3 flow: SenseEdge accelerator, RTL -> GDS -> Calibre signoff on
-// the custom commercial-40nm PDK (olympus). This wraps the PROVEN fab21 recipe -- the
+// a custom commercial 40 nm PDK. This wraps the PROVEN fab21 recipe -- the
 // one that historically took 21 numbered Innovus iterations and 33 command
 // files to converge -- as three declared, hashed, cached steps behind two
 // field-bug gates.
@@ -7,8 +7,8 @@
 // Run (on olympus, from silica_run/):
 //   silica --flow senseedge_flow.sil
 
-let W   = "/mnt/shared-scratch/Silva-Martinez_J/fidelmakatia/senseedge_40nm"
-let PDK = "/mnt/shared-scratch/Silva-Martinez_J/fidelmakatia/pdk40_digital"
+let W   = "/work/senseedge_40nm"          // adjust to your site
+let PDK = "/work/pdk40_digital"           // adjust to your site
 let R   = W + "/silica_run"
 
 let rtl = [ W + "/rtl/defines.v",         W + "/rtl/spi_adc_if.v",
@@ -27,11 +27,15 @@ let unit = assert_lib_units(libs)
 print("gate 1: liberty time units consistent (" + unit + ")")
 
 // ---- GATE 2: streamOut silently drops any layer without a map row.
-// (Missing VIA rows once dropped every via cut from the GDS; LVS saw opens.)
+// (Missing VIA rows once dropped every via cut from the GDS; LVS saw opens.
+//  Missing NAME rows dropped every port label -- 18 consecutive historical
+//  LVS runs on this chip were INCORRECT with "Ports: 0 vs 395" before this
+//  gate existed. The deck reads port text from GDS 131-138;0.)
 let stack = [ "M1","M2","M3","M4","M5","M6","M7","M8",
-              "VIA1","VIA2","VIA3","VIA4","VIA5","VIA6","VIA7" ]
-assert_map_total(W + "/chipmap_full_v2.map", stack)
-print("gate 2: stream map is total over the routing stack")
+              "VIA1","VIA2","VIA3","VIA4","VIA5","VIA6","VIA7",
+              "M1.NAME","M2.NAME","M3.NAME","M4.NAME" ]
+assert_map_total(R + "/chipmap_silica.map", stack)
+print("gate 2: stream map is total over the routing stack (incl. pin text)")
 
 // ---- STEP 1: Genus synthesis (35.7k-cell accelerator, wb_clk 200 MHz)
 step("synth", "sbatch --wait " + R + "/synth.sbatch",
@@ -45,7 +49,7 @@ step("pnr", "sbatch --wait " + R + "/pnr.sbatch",
        R + "/pnr_silica.tcl",         R + "/mmmc_silica.tcl",
        W + "/lef/tech40_full.lef",
        PDK + "/lef/counter_cells_pg_m2.lef",
-       W + "/chipmap_full_v2.map" ] + libs,
+       R + "/chipmap_silica.map" ] + libs,
      [ R + "/pnr/senseedge_silica_pnr.v", W + "/gds/senseedge_silica.gds" ])
 
 // ---- STEP 3: Calibre DRC + LVS signoff

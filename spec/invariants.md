@@ -1,7 +1,7 @@
 # The standard invariant library — and the field bugs each one answers
 
 Every invariant in SILICA is a runtime primitive, not user code. This file maps
-each one to the real failure (from the commercial-40nm harvester SoC and ASAP7 GPU
+each one to the real failure (from a commercial-40nm harvester SoC and an ASAP7 GPU
 campaigns, 2026-06/07) that motivated it. The rule: **if a bug class cost a
 signoff round, it becomes either inexpressible or a hard error.**
 

@@ -114,16 +114,23 @@ def assert_lib_units(files):
 
 
 def assert_map_total(mapfile, names):
+    """Names may be plain layers ("M3": any row) or layer.kind pairs
+    ("M3.NAME": a row of that object kind -- e.g. pin-text rows, whose
+    absence silently drops every port label from the streamed GDS)."""
     _strlist(names, "assert_map_total names")
     if not os.path.exists(mapfile):
         raise Counterexample("flow.map-total", "missing-map", [], [], mapfile)
-    rows = set()
+    rows, pairs = set(), set()
     with open(mapfile) as f:
         for ln in f:
             ln = ln.strip()
             if ln and not ln.startswith("#"):
-                rows.add(ln.split()[0])
-    missing = [n for n in names if n not in rows]
+                toks = ln.split()
+                rows.add(toks[0])
+                if len(toks) > 1:
+                    pairs.add(toks[0] + "." + toks[1])
+    missing = [n for n in names
+               if n not in (pairs if "." in n else rows)]
     if missing:
         raise Counterexample("flow.map-total", "unmapped-layer", [], [],
                              "no stream-map rows for: " + ", ".join(missing))

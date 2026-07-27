@@ -165,7 +165,7 @@ Deep dive: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 ## 🏭 It runs real flows
 
 [`examples/senseedge_flow.sil`](examples/senseedge_flow.sil) rebuilds a real
-35.7k-cell accelerator on a custom commercial-40nm PDK — Genus synthesis → Innovus
+35.7k-cell accelerator on a custom commercial 40 nm PDK — Genus synthesis → Innovus
 P&R/CTS/fill/streamOut → Calibre DRC+LVS — as one SILICA program with two
 field-bug gates in front. The historical version of this flow took **21
 numbered Innovus iterations and 33 command files** to converge; the SILICA

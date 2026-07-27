@@ -24,7 +24,7 @@ Agentic chip design has two halves that today's tooling smears together:
 
 When an LLM drives raw tools (KLayout pya, Innovus Tcl, sed on netlists), it
 ends up owning *both* halves: it writes the edit **and** writes the guard that
-checks the edit. Both are then fallible. In the commercial-40nm harvester campaign this
+checks the edit. Both are then fallible. In the 40nm harvester campaign this
 is precisely what failed — a hand-rolled edit guard had a cross-layer
 exemption bug that shorted 4 nets while reporting success, and only a
 separately hand-maintained flat conductor count caught it, rounds later.
@@ -280,7 +280,7 @@ commit rather than at the add) live in the adapter, not the language.
 
 ## 7. Why every rule exists: the field-bug map
 
-SILICA was distilled from real multi-day agentic tapeout campaigns (commercial-40nm
+SILICA was distilled from real multi-day agentic tapeout campaigns (a commercial-40nm
 harvester SoC: 40+ Calibre signoff rounds to DRC-0/LVS-CORRECT; ASAP7 chiplet
 GPU). Every strictness rule answers a failure that actually consumed a
 signoff round (full map: `spec/invariants.md`):
@@ -313,7 +313,7 @@ SILICA/
 │   ├── fix_notch.sil            replay of a real harvester DRC fix (commits)
 │   ├── pad_bridge_caught.sil    replay of the round-7 guard bug (rolls back)
 │   ├── padframe_gen.sil         parametric padframe — loop, not 400 polygons
-│   └── senseedge_flow.sil       real RTL→GDS→signoff flow on commercial-40nm
+│   └── senseedge_flow.sil       real RTL→GDS→signoff flow on a 40nm PDK
 ├── tests/                       4 suites / 38 checks
 ├── eval/PLAN.md                 pre-registered replay of the 11-round
 │                                padframe campaign; prediction ≈4 rounds
