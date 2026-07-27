@@ -1,0 +1,58 @@
+// SILICA v0.3 flow: SenseEdge accelerator, RTL -> GDS -> Calibre signoff on
+// the custom commercial-40nm PDK (olympus). This wraps the PROVEN fab21 recipe -- the
+// one that historically took 21 numbered Innovus iterations and 33 command
+// files to converge -- as three declared, hashed, cached steps behind two
+// field-bug gates.
+//
+// Run (on olympus, from silica_run/):
+//   python3 silica.py --flow senseedge_flow.sil
+
+let W   = "/mnt/shared-scratch/Silva-Martinez_J/fidelmakatia/senseedge_40nm"
+let PDK = "/mnt/shared-scratch/Silva-Martinez_J/fidelmakatia/pdk40_digital"
+let R   = W + "/silica_run"
+
+let rtl = [ W + "/rtl/defines.v",         W + "/rtl/spi_adc_if.v",
+            W + "/rtl/fft_engine.v",      W + "/rtl/feature_extract.v",
+            W + "/rtl/nn_engine.v",       W + "/rtl/alarm_logic.v",
+            W + "/rtl/wb_interface.v",    W + "/rtl/senseedge_top.v" ]
+
+let libs = [ PDK + "/lib/pdk40_tt.lib",
+             PDK + "/lib/pdk40_ss.lib",
+             PDK + "/lib/pdk40_ff.lib" ]
+
+// ---- GATE 1: the Genus first-read-liberty units bug, made inexpressible.
+// (A ns-unit lib read first once turned a 1 ns clock into 1 us and burned a
+// 4-hour synthesis. Here mixed units halt BEFORE any tool launches.)
+let unit = assert_lib_units(libs)
+print("gate 1: liberty time units consistent (" + unit + ")")
+
+// ---- GATE 2: streamOut silently drops any layer without a map row.
+// (Missing VIA rows once dropped every via cut from the GDS; LVS saw opens.)
+let stack = [ "M1","M2","M3","M4","M5","M6","M7","M8",
+              "VIA1","VIA2","VIA3","VIA4","VIA5","VIA6","VIA7" ]
+assert_map_total(W + "/chipmap_full_v2.map", stack)
+print("gate 2: stream map is total over the routing stack")
+
+// ---- STEP 1: Genus synthesis (35.7k-cell accelerator, wb_clk 200 MHz)
+step("synth", "sbatch --wait " + R + "/synth.sbatch",
+     rtl + libs + [ R + "/genus_silica.tcl" ],
+     [ R + "/syn/senseedge_silica.v", R + "/syn/senseedge_silica.sdc" ])
+
+// ---- STEP 2: Innovus P&R -- floorplan, PG grid, place, CTS, route,
+//              filler, metal fill, streamOut (the fab21 recipe)
+step("pnr", "sbatch --wait " + R + "/pnr.sbatch",
+     [ R + "/syn/senseedge_silica.v", R + "/syn/senseedge_silica.sdc",
+       R + "/pnr_silica.tcl",         R + "/mmmc_silica.tcl",
+       W + "/lef/tech40_full.lef",
+       PDK + "/lef/counter_cells_pg_m2.lef",
+       W + "/chipmap_full_v2.map" ] + libs,
+     [ R + "/pnr/senseedge_silica_pnr.v", W + "/gds/senseedge_silica.gds" ])
+
+// ---- STEP 3: Calibre DRC + LVS signoff
+step("signoff", "sbatch --wait " + R + "/signoff.sbatch",
+     [ W + "/gds/senseedge_silica.gds", R + "/pnr/senseedge_silica_pnr.v",
+       PDK + "/drc/inv_2x_1x.rule",     PDK + "/lvs/count6.lvsrule",
+       PDK + "/lvs/cells.spi" ],
+     [ R + "/signoff/silica.drc.summary", R + "/signoff/chip_silica.lvs.rep" ])
+
+print("SenseEdge SILICA flow complete: RTL -> GDS -> signoff")

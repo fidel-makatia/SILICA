@@ -827,9 +827,23 @@ class Interp:
 
 # ----------------------------------------------------------------------------
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("usage: silica.py program.sil"); sys.exit(2)
-    program = Parser(lex(open(sys.argv[1]).read())).parse()
-    for name, ok, ce in Interp(program).run():
+    import os
+    argv = sys.argv[1:]
+    use_flow = "--flow" in argv
+    files = [a for a in argv if not a.startswith("--")]
+    if len(files) != 1:
+        print("usage: silica.py [--flow] program.sil"); sys.exit(2)
+    program = Parser(lex(open(files[0]).read())).parse()
+    it = Interp(program)
+    if use_flow:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import silica_flow
+        silica_flow.install(it)
+    try:
+        results = it.run()
+    except Counterexample as ce:
+        # a flow-layer failure outside any tx: structured halt
+        print("FLOW-HALT " + json.dumps(ce.data)); sys.exit(1)
+    for name, ok, ce in results:
         print(("COMMIT   " if ok else "ROLLBACK ") + name,
               json.dumps(ce) if ce else "")
