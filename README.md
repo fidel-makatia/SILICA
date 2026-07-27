@@ -1,7 +1,27 @@
 # SILICA
 
 **S**tructured **I**nvariant **L**anguage for **I**ntegrated **C**ircuit **A**gents —
-a programming language that makes agentic physical chip design *deterministic*.
+a full, tool-agnostic programming language that makes agentic physical chip
+design *deterministic*.
+
+```
+fn pad(i, pitch) { return box(i*pitch, 0, i*pitch + 56000, 68000) }
+
+tx place_pads {
+  for i in range(0, n) {
+    add m6 pad(i, pitch) on new_net
+    label m6 "PAD_" + str(i) at (i*pitch + 28000, 34000)
+  }
+  assert spacing(m6, window(0, 0, n*pitch, 68000)) >= 70
+}
+```
+
+Full language: functions, control flow, lists, strings — a padframe is a loop,
+not 400 hand-written polygons. Tool-agnostic: the interpreter drives an
+abstract backend protocol; the pure-Python engine and a live KLayout adapter
+both ship, and the test suite requires identical commit/rollback decisions on
+both. An Innovus/OpenAccess backend is a protocol implementation, not a
+language change.
 
 ## Thesis
 
@@ -56,8 +76,11 @@ happened — see `spec/invariants.md` for the bug-to-principle map. Highlights:
 - `spec/SPEC.md` — language definition (types, semantics, error model)
 - `spec/grammar.ebnf` — surface grammar
 - `spec/invariants.md` — the standard invariant library + field bug map
-- `prototype/` — reference interpreter (Python): core transform layer,
-  pure-Python geometry engine + KLayout bridge backend
+- `prototype/silica.py` — reference interpreter (Python): full language
+  (lexer/parser/evaluator) + transactional transform layer + pure-Python
+  reference backend
+- `prototype/backends/` — tool adapters implementing the backend protocol
+  (KLayout shipping; Innovus/OpenAccess = future protocol implementations)
 - `examples/` — real programs, incl. replays of actual harvester fixes
 - `eval/` — evaluation plan: replay the harvester padframe campaign in SILICA
   vs. raw scripting; count rounds-to-clean and error classes made inexpressible
@@ -65,4 +88,10 @@ happened — see `spec/invariants.md` for the bug-to-principle map. Highlights:
 
 ## Status
 
-v0.1 — core transform layer implemented and self-testing; goal/flow layers specified.
+v0.2 — full general-purpose language (fn/if/while/for/lists/strings) with the
+transactional transform layer; tool-agnostic backend protocol with pure-Python
+and KLayout backends passing the same test suite. Goal/flow layers specified.
+
+Run a program: `python3 prototype/silica.py examples/padframe_gen.sil`
+Run the tests: `python3 tests/test_core.py && python3 tests/test_lang.py &&
+python3 tests/test_backend_klayout.py`

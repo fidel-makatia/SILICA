@@ -1,11 +1,17 @@
-(* SILICA v0.1 surface grammar *)
+(* SILICA v0.2 surface grammar -- a full language; declarations, transactions,
+   and general-purpose statements compose freely at any level except that
+   declarations may not appear inside tx blocks. *)
 
-program     = design_decl , { decl } , { tx } ;
+program     = { stmt } ;
 
+stmt        = design_decl | stack_decl | rules_decl | inv_decl
+            | fn_decl | let_stmt | if_stmt | while_stmt | for_stmt
+            | return_stmt | tx | add_stmt | sub_stmt | label_stmt
+            | assert_stmt | assign_stmt | expr_stmt ;
+
+(* ---- declarations ---- *)
 design_decl = "design" , string , "top" , ident , "units" , unit , "grid" , int ;
 unit        = "nm" | "um" ;
-
-decl        = stack_decl | rules_decl | inv_decl | macro_decl | port_decl ;
 
 stack_decl  = "stack" , "{" , { layer_item } , "}" ;
 layer_item  = "metal" , ident , "=" , lpair
@@ -13,40 +19,59 @@ layer_item  = "metal" , ident , "=" , lpair
 lpair       = "(" , int , "," , int , ")" ;
 
 rules_decl  = "rules" , "{" , { rule_item } , "}" ;
-rule_item   = ident , "." , rule_kind , [ cond ] , ">=" , int ;
+rule_item   = ident , "." , rule_kind , [ cond ] , ">=" , expr ;
 rule_kind   = "width" | "space" | "enclosure" | "area" ;
 cond        = "(" , ident , ">" , int , { "," , ident , ">" , int } , ")" ;
 
 inv_decl    = "invariants" , "{" , ident , { "," , ident } , "}" ;
 
-macro_decl  = "macro" , ident , "from" , string ;
-port_decl   = "port" , ident , [ "alias" , "(" , ident , "," , ident , ")" ] ;
+fn_decl     = "fn" , ident , "(" , [ ident , { "," , ident } ] , ")" , block ;
 
-tx          = "tx" , ident , "{" , { stmt } , "}" ;
-stmt        = add_stmt | sub_stmt | place_stmt | move_stmt
-            | label_stmt | delete_stmt | assert_stmt ;
+(* ---- general-purpose statements ---- *)
+let_stmt    = "let" , ident , "=" , expr ;
+assign_stmt = ( ident | index_expr ) , "=" , expr ;
+if_stmt     = "if" , expr , block , [ "else" , ( if_stmt | block ) ] ;
+while_stmt  = "while" , expr , block ;
+for_stmt    = "for" , ident , "in" , expr , block ;
+return_stmt = "return" , [ expr ] ;
+expr_stmt   = expr ;
+block       = "{" , { stmt } , "}" ;
 
-add_stmt    = "add" , ident , box_expr , "on" , net_expr ;
-sub_stmt    = "sub" , ident , box_expr , [ "splitting" ] ;
-place_stmt  = "place" , ident , "as" , ident , "at" , point , [ orient ] ;
-move_stmt   = "move" , ident , "by" , point ;
-label_stmt  = "label" , ident , string , "at" , point ;
-delete_stmt = "delete" , ident ;
-assert_stmt = "assert" , check_expr , ">=" , int ;
+(* ---- transactions ---- *)
+tx          = "tx" , ident , block ;
+add_stmt    = "add" , ident , expr , "on" , net_expr ;
+sub_stmt    = "sub" , ident , expr , [ "splitting" ] ;
+label_stmt  = "label" , ident , expr , "at" , point ;
+assert_stmt = "assert" , check_expr , ">=" , expr ;
 
-net_expr    = "net_at" , "(" , ident , "," , int , "," , int , ")"
+net_expr    = "net_at" , "(" , ident , "," , expr , "," , expr , ")"
             | "new_net"
             | "merge" , "(" , net_expr , "," , net_expr , ")" ;
 
-check_expr  = "spacing"   , "(" , ident , "," , window , ")"
-            | "width"     , "(" , ident , "," , window , ")"
-            | "enclosure" , "(" , ident , "," , ident , "," , window , ")" ;
-window      = "window" , "(" , int , "," , int , "," , int , "," , int , ")" ;
+check_expr  = ( "spacing" | "width" ) , "(" , ident , "," , window , ")" ;
+window      = "window" , "(" , expr , "," , expr , "," , expr , "," , expr , ")" ;
+point       = "(" , expr , "," , expr , ")" ;
 
-box_expr    = "box" , "(" , int , "," , int , "," , int , "," , int , ")" ;
-point       = "(" , int , "," , int , ")" ;
-orient      = "R0" | "R90" | "R180" | "R270" | "MX" | "MY" ;
+(* ---- expressions (precedence low to high) ---- *)
+expr        = or_expr ;
+or_expr     = and_expr , { ( "||" | "or" ) , and_expr } ;
+and_expr    = eq_expr , { ( "&&" | "and" ) , eq_expr } ;
+eq_expr     = cmp_expr , { ( "==" | "!=" ) , cmp_expr } ;
+cmp_expr    = add_expr , { ( "<" | ">" | "<=" | ">=" ) , add_expr } ;
+add_expr    = mul_expr , { ( "+" | "-" ) , mul_expr } ;
+mul_expr    = un_expr , { ( "*" | "/" | "%" ) , un_expr } ;
+un_expr     = ( "-" | "!" | "not" ) , un_expr | post_expr ;
+post_expr   = primary , { call_suffix | index_suffix } ;
+call_suffix = "(" , [ expr , { "," , expr } ] , ")" ;
+index_suffix= "[" , expr , "]" ;
+index_expr  = post_expr (* ending in index_suffix *) ;
+primary     = int | string | "true" | "false" | ident
+            | "(" , expr , ")" | "[" , [ expr , { "," , expr } ] , "]" ;
+
+(* `box(x1,y1,x2,y2)` is a builtin constructor: four ints, grid-checked,
+   x2>x1 and y2>y1 enforced -- degenerate/inverted/off-grid is a hard error.
+   `/` is exact integer division: an inexact quotient is a hard error. *)
 
 ident       = letter , { letter | digit | "_" } ;
-int         = [ "-" ] , digit , { digit } ;
+int         = digit , { digit } ;
 string      = '"' , { character } , '"' ;

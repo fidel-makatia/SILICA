@@ -1,4 +1,36 @@
-# SILICA language specification — v0.1
+# SILICA language specification — v0.2
+
+## 0. What kind of language this is
+
+SILICA is a **full, general-purpose programming language** — functions,
+control flow, integer/string/list values — with the design database and
+transactional geometry edits as built-in effects, and it is **tool-agnostic**:
+the interpreter speaks only an abstract backend protocol (§9). A padframe is a
+loop that computes geometry; a DRC fix is a function; the same program runs
+unchanged on the pure-Python engine or on KLayout.
+
+```
+fn pad(i, pitch) { return box(i*pitch, 0, i*pitch + 56000, 68000) }
+
+tx place_pads {
+  for i in range(0, n) {
+    add m6 pad(i, pitch) on new_net
+    label m6 "PAD_" + str(i) at (i*pitch + 28000, 34000)
+  }
+  assert spacing(m6, window(0, 0, n*pitch, 68000)) >= 70
+}
+```
+
+General-purpose core:
+- `let` / assignment, `if`/`else`, `while`, `for x in list`, `fn`/`return`,
+  lists (`[..]`, indexing, `append`), strings (`+` concat, `str()`),
+  booleans, `and/or/not` (or `&&/||/!`)
+- builtins: `print len str abs min max range append box`
+- **`/` divides exactly or errors** — SILICA never rounds a coordinate.
+  `+` never coerces across types.
+- declarations (`design`/`stack`/`rules`/`invariants`/`fn`) may not appear
+  inside a `tx`; everything else composes freely, including loops and
+  function calls inside `tx` bodies.
 
 ## 1. Design model
 
@@ -125,3 +157,31 @@ Three severities, no fourth:
 
 There is no warning class. Anything worth saying is worth failing on or
 staying silent about — warnings are where silent coercions hide.
+
+## 9. Backend protocol (tool-agnosticism)
+
+The interpreter never manipulates geometry directly; it drives a backend
+through this protocol (all geometry crosses the interface as integer-DBU
+boxes):
+
+```
+declare_metal(name, l, d)      declare_via(name, l, d, ma, mb)
+clone() -> backend             # shadow copy for tx execution
+absorb(shadow)                 # commit: adopt the shadow's state
+add(layer, box)  sub(layer, box)  add_label(layer, text, x, y)
+on_metal(layer, x, y) -> bool
+nets() -> partition            net_count() -> int
+net_at(layer, x, y) -> id|None
+nets_touching(layer, box) -> [id]
+min_spacing(layer, win) -> num|None    min_width(layer, win) -> num|None
+```
+
+Net ids are opaque; the interpreter only compares them. Two backends ship
+with the reference implementation:
+- `silica.Design` — pure-Python engine (reference semantics)
+- `backends/klayout_backend.py` — the same protocol over a live
+  `pya.Layout`, with KLayout's Region engine doing merge/subtract/interaction
+
+The self-test suite runs the same SILICA programs on both and requires
+identical commit/rollback decisions. Adding an Innovus/OpenAccess backend is
+implementing this protocol, not changing the language.
