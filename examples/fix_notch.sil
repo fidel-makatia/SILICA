@@ -1,0 +1,22 @@
+// Replay of a real harvester-core DRC fix (M3 notch, signoff round ~9).
+// Original: a KLayout guarded_add in flow/grind13.py. Here the guard is
+// the language.
+design "harvester_top.gds" top harvester_top units nm grid 5
+
+stack {
+  metal m3 = (33,0)
+}
+
+rules {
+  m3.width >= 70
+  m3.space >= 70
+}
+
+invariants { connectivity }
+
+tx fix_notch {
+  // patch the notch full-height (v0.1 width checks are per-box, so the patch
+  // itself must be rule-legal) -- and it must stay on ITS net
+  add m3 box(749980, 518285, 750065, 518355) on net_at(m3, 749990, 518350)
+  assert spacing(m3, window(749480, 517845, 750565, 518855)) >= 70
+}

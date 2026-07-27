@@ -1,0 +1,26 @@
+// Replay of the padframe round-7 bug: a guard with a cross-layer exemption
+// bridged 4 nets and the tool reported success. In SILICA the same edit is a
+// commit failure -- run this file to see the counterexample.
+design "harvester_chip.gds" top harvester_chip units nm grid 5
+
+stack {
+  metal m5 = (35,0)
+  metal m6 = (36,0)
+  via   v5 = (55,0) connects (m5,m6)
+}
+
+invariants { connectivity }
+
+// Two router wires on m6 (distinct nets), as in the real W-column.
+tx seed {
+  add m6 box(747000, 518000, 748000, 518070) on new_net
+  add m6 box(747000, 518140, 748000, 518210) on new_net
+}
+
+tx bad_bridge {
+  // The "connection bar" the buggy guard allowed: it spans both wires.
+  // SILICA: touches 2 nets while declared `on net_at(...)` -> rollback,
+  // counterexample lists both nets. The 2026-06 campaign found this only
+  // via a hand-maintained flat conductor count (14718).
+  add m6 box(747400, 518000, 747500, 518210) on net_at(m6, 747100, 518035)
+}

@@ -1,0 +1,52 @@
+(* SILICA v0.1 surface grammar *)
+
+program     = design_decl , { decl } , { tx } ;
+
+design_decl = "design" , string , "top" , ident , "units" , unit , "grid" , int ;
+unit        = "nm" | "um" ;
+
+decl        = stack_decl | rules_decl | inv_decl | macro_decl | port_decl ;
+
+stack_decl  = "stack" , "{" , { layer_item } , "}" ;
+layer_item  = "metal" , ident , "=" , lpair
+            | "via"   , ident , "=" , lpair , "connects" , "(" , ident , "," , ident , ")" ;
+lpair       = "(" , int , "," , int , ")" ;
+
+rules_decl  = "rules" , "{" , { rule_item } , "}" ;
+rule_item   = ident , "." , rule_kind , [ cond ] , ">=" , int ;
+rule_kind   = "width" | "space" | "enclosure" | "area" ;
+cond        = "(" , ident , ">" , int , { "," , ident , ">" , int } , ")" ;
+
+inv_decl    = "invariants" , "{" , ident , { "," , ident } , "}" ;
+
+macro_decl  = "macro" , ident , "from" , string ;
+port_decl   = "port" , ident , [ "alias" , "(" , ident , "," , ident , ")" ] ;
+
+tx          = "tx" , ident , "{" , { stmt } , "}" ;
+stmt        = add_stmt | sub_stmt | place_stmt | move_stmt
+            | label_stmt | delete_stmt | assert_stmt ;
+
+add_stmt    = "add" , ident , box_expr , "on" , net_expr ;
+sub_stmt    = "sub" , ident , box_expr , [ "splitting" ] ;
+place_stmt  = "place" , ident , "as" , ident , "at" , point , [ orient ] ;
+move_stmt   = "move" , ident , "by" , point ;
+label_stmt  = "label" , ident , string , "at" , point ;
+delete_stmt = "delete" , ident ;
+assert_stmt = "assert" , check_expr , ">=" , int ;
+
+net_expr    = "net_at" , "(" , ident , "," , int , "," , int , ")"
+            | "new_net"
+            | "merge" , "(" , net_expr , "," , net_expr , ")" ;
+
+check_expr  = "spacing"   , "(" , ident , "," , window , ")"
+            | "width"     , "(" , ident , "," , window , ")"
+            | "enclosure" , "(" , ident , "," , ident , "," , window , ")" ;
+window      = "window" , "(" , int , "," , int , "," , int , "," , int , ")" ;
+
+box_expr    = "box" , "(" , int , "," , int , "," , int , "," , int , ")" ;
+point       = "(" , int , "," , int , ")" ;
+orient      = "R0" | "R90" | "R180" | "R270" | "MX" | "MY" ;
+
+ident       = letter , { letter | digit | "_" } ;
+int         = [ "-" ] , digit , { digit } ;
+string      = '"' , { character } , '"' ;
