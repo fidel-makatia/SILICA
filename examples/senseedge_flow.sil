@@ -50,11 +50,25 @@ step("pnr", "sbatch --wait " + R + "/pnr.sbatch",
        W + "/lef/tech40_full.lef",
        PDK + "/lef/counter_cells_pg_m2.lef",
        R + "/chipmap_silica.map" ] + libs,
-     [ R + "/pnr/senseedge_silica_pnr.v", W + "/gds/senseedge_silica.gds" ])
+     [ R + "/pnr/senseedge_silica_pnr.v", W + "/gds/senseedge_silica.gds",
+       R + "/pnr/pins.csv" ])
 
-// ---- STEP 3: Calibre DRC + LVS signoff
+// ---- STEP 3: deterministic pin-label injection (the ports/labels bug:
+//      Innovus streamed ZERO pin text with this deck's map -- 18 consecutive
+//      historical LVS runs on this chip were INCORRECT with "Ports: 0 vs
+//      395" and nobody noticed the warning. The deck reads port text from
+//      GDS 131-138;0; this step is a pure function of (gds, pins.csv).)
+step("labels", "python3 " + R + "/add_pin_labels.py senseedge_top "
+             + W + "/gds/senseedge_silica.gds "
+             + R + "/pnr/pins.csv "
+             + W + "/gds/senseedge_silica_labeled.gds",
+     [ W + "/gds/senseedge_silica.gds", R + "/pnr/pins.csv",
+       R + "/add_pin_labels.py" ],
+     [ W + "/gds/senseedge_silica_labeled.gds" ])
+
+// ---- STEP 4: Calibre DRC + LVS signoff
 step("signoff", "sbatch --wait " + R + "/signoff.sbatch",
-     [ W + "/gds/senseedge_silica.gds", R + "/pnr/senseedge_silica_pnr.v",
+     [ W + "/gds/senseedge_silica_labeled.gds", R + "/pnr/senseedge_silica_pnr.v",
        PDK + "/drc/inv_2x_1x.rule",     PDK + "/lvs/count6.lvsrule",
        PDK + "/lvs/cells.spi" ],
      [ R + "/signoff/silica.drc.summary", R + "/signoff/chip_silica.lvs.rep" ])
