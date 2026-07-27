@@ -2,7 +2,7 @@
 """Tool-agnosticism proof: the SAME SILICA programs run unchanged on the
 KLayout backend. Skips cleanly if the klayout python module is absent."""
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "prototype"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 try:
     import klayout.db  # noqa: F401
 except ImportError:
@@ -12,7 +12,7 @@ except ImportError:
         print("SKIP: klayout python module not installed (pip install klayout)")
         sys.exit(0)
 from silica import Interp, Parser, lex, Box
-from backends.klayout_backend import KLayoutBackend
+from silica.backends.klayout import KLayoutBackend
 
 HDR = ('design "t.gds" top t units nm grid 5\n'
        'stack {\n metal m2 = (32,0)\n metal m3 = (33,0)\n'

@@ -9,7 +9,7 @@ pieces fit, and why each boundary is drawn where it is.*
 ## 1. The one-sentence answer
 
 **SILICA does not need an LLM to work.** It is an ordinary deterministic
-programming language — `python3 prototype/silica.py program.sil` runs with no
+programming language — `silica program.sil` runs with no
 model, no network, no sampling anywhere in the loop. SILICA is designed to be
 *written by* agents, not *powered by* them.
 
@@ -238,7 +238,7 @@ protocol; which engine sits behind it is invisible to the language:
 ```
                        ┌──────────────────────────┐
                        │   SILICA interpreter     │
-                       │   (prototype/silica.py)  │
+                       │   (silica/interpreter.py)  │
                        └────────────┬─────────────┘
                                     │ backend protocol only:
                                     │  declare_metal/declare_via
@@ -298,24 +298,23 @@ signoff round (full map: `spec/invariants.md`):
 ## 8. Repo map and current state
 
 ```
-silica-lang/
+SILICA/
 ├── README.md                    thesis + field-data table
+├── silica/
+│   ├── interpreter.py           reference interpreter + pure-Python backend
+│   ├── flow.py                  flow layer: step(), field-bug gates
+│   ├── backends/klayout.py      live pya.Layout adapter (same protocol)
+│   └── cli.py                   the `silica` command
 ├── spec/
-│   ├── SPEC.md                  normative language definition (v0.2)
+│   ├── SPEC.md                  normative language definition
 │   ├── grammar.ebnf             surface grammar
 │   └── invariants.md            invariant library ↔ field-bug map
-├── prototype/
-│   ├── silica.py                reference interpreter + pure-Python backend
-│   └── backends/
-│       └── klayout_backend.py   live pya.Layout adapter (same protocol)
 ├── examples/
 │   ├── fix_notch.sil            replay of a real harvester DRC fix (commits)
 │   ├── pad_bridge_caught.sil    replay of the round-7 guard bug (rolls back)
-│   └── padframe_gen.sil         parametric padframe — loop, not 400 polygons
-├── tests/
-│   ├── test_core.py             13 field-bug tests (pure-Python backend)
-│   ├── test_lang.py             7 language-core tests
-│   └── test_backend_klayout.py  6 same-decisions tests on KLayout
+│   ├── padframe_gen.sil         parametric padframe — loop, not 400 polygons
+│   └── senseedge_flow.sil       real RTL→GDS→signoff flow on commercial-40nm
+├── tests/                       4 suites / 38 checks
 ├── eval/PLAN.md                 pre-registered replay of the 11-round
 │                                padframe campaign; prediction ≈4 rounds
 └── docs/ARCHITECTURE.md         this document
@@ -323,12 +322,12 @@ silica-lang/
 
 | Layer | Status |
 |---|---|
-| Transform layer (language + tx + invariants) | **implemented, v0.2, 26/26 tests green on both backends** |
+| Transform layer (language + tx + invariants) | **implemented, 38 checks green on both backends** |
 | Backend protocol + pure-Python + KLayout backends | **implemented** |
 | Conditional rules (`m3.space(wide>1650) >= 500`) | parsed, unchecked |
 | `ports` / `density` / `schema` invariants | specified |
 | Goal layer (tactics, budgets, traces) | specified |
-| Flow layer (hermetic content-addressed steps) | specified |
+| Flow layer (hermetic content-addressed steps) | **implemented subset (v0.3): step(), caching, gates** |
 
 ## 9. Summary
 

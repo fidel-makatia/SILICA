@@ -2,7 +2,7 @@
 """SILICA v0.2 language-feature tests: functions, loops, control flow,
 parametric geometry -- the general-purpose core wrapped around the tx layer."""
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "prototype"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from silica import Interp, Parser, lex, Design, ParseError
 
 fails = 0

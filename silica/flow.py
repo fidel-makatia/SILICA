@@ -26,7 +26,7 @@ readable channel as tx rollbacks -- and halt the flow.
 """
 import hashlib, json, os, re, subprocess, time
 
-from silica import Counterexample, ParseError
+from silica.interpreter import Counterexample, ParseError
 
 
 def _sha(path):

@@ -1,0 +1,30 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install (with KLayout backend)
+        run: pip install -e ".[klayout]"
+      - name: Core field-bug tests (pure-Python backend)
+        run: python tests/test_core.py
+      - name: Language-core tests
+        run: python tests/test_lang.py
+      - name: Flow-layer tests
+        run: python tests/test_flow.py
+      - name: Same-decisions tests (KLayout backend)
+        run: python tests/test_backend_klayout.py
+      - name: Run an example end-to-end
+        run: silica examples/padframe_gen.sil

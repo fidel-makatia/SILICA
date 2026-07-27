@@ -5,7 +5,7 @@
 // field-bug gates.
 //
 // Run (on olympus, from silica_run/):
-//   python3 silica.py --flow senseedge_flow.sil
+//   silica --flow senseedge_flow.sil
 
 let W   = "/mnt/shared-scratch/Silva-Martinez_J/fidelmakatia/senseedge_40nm"
 let PDK = "/mnt/shared-scratch/Silva-Martinez_J/fidelmakatia/pdk40_digital"

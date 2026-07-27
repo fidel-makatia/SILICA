@@ -178,8 +178,8 @@ min_spacing(layer, win) -> num|None    min_width(layer, win) -> num|None
 
 Net ids are opaque; the interpreter only compares them. Two backends ship
 with the reference implementation:
-- `silica.Design` — pure-Python engine (reference semantics)
-- `backends/klayout_backend.py` — the same protocol over a live
+- `silica.Design` (in `silica/interpreter.py`) — pure-Python engine (reference semantics)
+- `silica/backends/klayout.py` — the same protocol over a live
   `pya.Layout`, with KLayout's Region engine doing merge/subtract/interaction
 
 The self-test suite runs the same SILICA programs on both and requires

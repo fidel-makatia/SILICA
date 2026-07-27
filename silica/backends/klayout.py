@@ -19,7 +19,7 @@ except ImportError:
     except ImportError:
         pya = None
 
-from silica import Box, UF
+from silica.interpreter import Box, UF
 
 
 def _bbox_gap(a, b):

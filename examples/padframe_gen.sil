@@ -4,7 +4,7 @@
 // checked attached; the spacing assert runs before commit. Off-by-one pitch
 // bugs become rollbacks with coordinates, not fab-week discoveries.
 //
-// Run it:  python3 prototype/silica.py examples/padframe_gen.sil
+// Run it:  silica examples/padframe_gen.sil
 
 design "padring.gds" top padring units nm grid 5
 

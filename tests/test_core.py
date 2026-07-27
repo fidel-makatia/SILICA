@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SILICA v0.1 self-tests: each test encodes one field bug made inexpressible."""
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "prototype"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from silica import Interp, Parser, lex, Design, Box, ParseError
 
 HDR = '''design "t.gds" top t units nm grid 5

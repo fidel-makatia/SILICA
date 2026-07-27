@@ -2,9 +2,9 @@
 """SILICA v0.3 flow-layer tests: hermetic steps, caching, and the two
 field-bug gates (liberty units, stream-map totality)."""
 import sys, os, tempfile
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "prototype"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from silica import Interp, Parser, lex, Counterexample
-import silica_flow
+from silica import flow as silica_flow
 
 fails = 0
 def check(name, cond):
