@@ -1,0 +1,47 @@
+// A notch repair -- and the same repair done wrong.
+//
+// A notch is a bite out of one edge of a wire. The wire is still one net, so
+// no connectivity check sees it; it is still visibly "there", so no review
+// catches it; and it is now narrower than the minimum width, so DRC will say
+// so one signoff round later. This is the shape of edit SILICA exists to make
+// safe: the runtime, not the author, decides whether the patch is legal.
+//
+// Run:  silica examples/fix_notch.sil
+//
+// The layer number, grid and rule value below are illustrative placeholders.
+// They are not from any process design kit; substitute your own.
+
+design "chip.gds" top chip units nm grid 10
+
+stack {
+  metal m3 = (3,0)
+}
+
+invariants { connectivity }
+
+// The pre-state, as an upstream tool left it: two routed wires on distinct
+// nets, and a notch in the lower edge of the upper one.
+tx load {
+  add m3 box(0,   0, 2000, 100) on new_net
+  add m3 box(0, 200, 2000, 300) on new_net
+  sub m3 box(800, 200,  900, 240)
+}
+
+// From here on the runtime enforces the rule. Declaring it after the load is
+// deliberate: you inherit a design, then declare what YOUR edits must satisfy.
+rules { m3.width >= 100 }
+
+// The repair, one edge misplaced: it fills only part of the notch and leaves
+// the wire 20 nm wide there. Reporting success would be a lie, so this rolls
+// back -- atomically, with the measurement in the counterexample.
+tx underfill {
+  add m3 box(800, 200, 900, 220) on net_at(m3, 400, 250)
+}
+
+// The repair, done right. `on net_at(...)` is the load-bearing part: the patch
+// must land on the wire's OWN net. Aim at the neighbour instead and the whole
+// transaction rolls back with both net ids in the counterexample.
+tx fix_notch {
+  add m3 box(800, 200, 900, 240) on net_at(m3, 400, 250)
+  assert width(m3, window(700, 100, 1000, 400)) >= 100
+}

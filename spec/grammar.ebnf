@@ -1,0 +1,86 @@
+(* SILICA v0.4 surface grammar -- a full language; declarations, transactions
+   and general-purpose statements compose freely at any level, except that
+   declarations may not appear inside tx blocks.
+
+   Productions marked SPECIFIED parse but are refused by the current
+   implementation, which will not accept a declaration it cannot check. *)
+
+program     = { stmt } ;
+
+stmt        = design_decl | stack_decl | rules_decl | inv_decl
+            | fn_decl | let_stmt | if_stmt | while_stmt | for_stmt
+            | return_stmt | tx | add_stmt | sub_stmt | label_stmt
+            | assert_stmt | assign_stmt | expr_stmt ;
+
+(* ---- declarations ---- *)
+design_decl = "design" , string , "top" , ident , "units" , unit , "grid" , int ;
+unit        = "nm" | "um" ;
+
+stack_decl  = "stack" , "{" , { layer_item } , "}" ;
+layer_item  = "metal" , ident , "=" , lpair
+            | "via"   , ident , "=" , lpair , "connects" , "(" , ident , "," , ident , ")" ;
+lpair       = "(" , int , "," , int , ")" ;
+
+rules_decl  = "rules" , "{" , { rule_item } , "}" ;
+rule_item   = ident , "." , rule_kind , [ cond ] , ">=" , expr ;
+rule_kind   = "width" | "space"
+            | "enclosure" | "area" | "density" ;          (* SPECIFIED *)
+cond        = "(" , ident , ">" , int , { "," , ident , ">" , int } , ")" ;  (* SPECIFIED *)
+
+inv_decl    = "invariants" , "{" , inv_name , { "," , inv_name } , "}" ;
+inv_name    = "connectivity"
+            | "ports" | "density" | "schema" ;            (* SPECIFIED *)
+
+fn_decl     = "fn" , ident , "(" , [ ident , { "," , ident } ] , ")" , block ;
+
+(* ---- general-purpose statements ---- *)
+let_stmt    = "let" , ident , "=" , expr ;
+assign_stmt = ( ident | index_expr ) , "=" , expr ;
+if_stmt     = "if" , expr , block , [ "else" , ( if_stmt | block ) ] ;
+while_stmt  = "while" , expr , block ;
+for_stmt    = "for" , ident , "in" , expr , block ;
+return_stmt = "return" , [ expr ] ;
+expr_stmt   = expr ;
+block       = "{" , { stmt } , "}" ;
+
+(* ---- transactions ---- *)
+tx          = "tx" , ident , block ;
+add_stmt    = "add" , ident , expr , "on" , net_expr ;
+sub_stmt    = "sub" , ident , expr , { "splitting" | "deleting" } ;
+label_stmt  = "label" , ident , expr , "at" , point ;
+assert_stmt = "assert" , check_expr , ">=" , expr ;
+
+net_expr    = "net_at" , "(" , ident , "," , expr , "," , expr , ")"
+            | "new_net"
+            | "merge" , "(" , net_expr , "," , net_expr , ")" ;
+
+check_expr  = ( "spacing" | "width" ) , "(" , ident , "," , window , ")" ;
+window      = "window" , "(" , expr , "," , expr , "," , expr , "," , expr , ")" ;
+point       = "(" , expr , "," , expr , ")" ;
+
+(* ---- expressions (precedence low to high) ---- *)
+expr        = or_expr ;
+or_expr     = and_expr , { ( "||" | "or" ) , and_expr } ;
+and_expr    = eq_expr , { ( "&&" | "and" ) , eq_expr } ;
+eq_expr     = cmp_expr , { ( "==" | "!=" ) , cmp_expr } ;
+cmp_expr    = add_expr , { ( "<" | ">" | "<=" | ">=" ) , add_expr } ;
+add_expr    = mul_expr , { ( "+" | "-" ) , mul_expr } ;
+mul_expr    = un_expr , { ( "*" | "/" | "%" ) , un_expr } ;
+un_expr     = ( "-" | "!" | "not" ) , un_expr | post_expr ;
+post_expr   = primary , { call_suffix | index_suffix } ;
+call_suffix = "(" , [ expr , { "," , expr } ] , ")" ;
+index_suffix= "[" , expr , "]" ;
+index_expr  = post_expr (* ending in index_suffix *) ;
+primary     = int | string | "true" | "false" | ident
+            | "(" , expr , ")" | "[" , [ expr , { "," , expr } ] , "]" ;
+
+(* `box(x1,y1,x2,y2)` is a builtin constructor: four ints, grid-checked, with
+   x2>x1 and y2>y1 enforced -- degenerate, inverted or off-grid is a hard
+   error, wherever the value was computed.
+   `/` is exact integer division: an inexact quotient is a hard error.
+   Every layer name must be declared in `stack`; `label` requires a metal. *)
+
+ident       = letter , { letter | digit | "_" } ;
+int         = digit , { digit } ;
+string      = '"' , { character - '"' } , '"' ;
+comment     = "//" , { character - newline } ;

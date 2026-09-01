@@ -1,0 +1,80 @@
+// A complete RTL -> GDS -> signoff flow as one SILICA program: two pre-tool
+// gates in front of four declared, content-hashed, cached steps.
+//
+// Run:  silica --flow examples/asic_flow.sil
+//
+// Every path, file name and tool invocation below is a placeholder. Point them
+// at your own flow; nothing here is specific to any PDK, foundry or vendor
+// deck. The program will halt on the first missing input rather than run.
+
+let W   = "/work/example_soc"        // adjust to your site
+let PDK = "/work/example_pdk"        // adjust to your site
+let R   = W + "/silica_run"
+
+let rtl = [ W + "/rtl/defines.v",     W + "/rtl/bus_if.v",
+            W + "/rtl/datapath.v",    W + "/rtl/control.v",
+            W + "/rtl/top.v" ]
+
+let libs = [ PDK + "/lib/stdcells_tt.lib",
+             PDK + "/lib/stdcells_ss.lib",
+             PDK + "/lib/stdcells_ff.lib" ]
+
+// ---- GATE 1: mixed liberty time units, made a pre-tool error.
+// Synthesis tools have taken time units from whichever library they read
+// FIRST. Read a ns-unit library ahead of a ps-unit one and a 1 ns clock
+// constraint silently becomes 1 us -- hours of synthesis producing garbage
+// that looks like a result. Here disagreeing units halt before any tool runs.
+let unit = assert_lib_units(libs)
+print("gate 1: liberty time units agree (" + unit + ")")
+
+// ---- GATE 2: an incomplete stream map, made a pre-tool error.
+// Stream-out silently drops any layer without a map row. A missing via row
+// drops every via cut from the GDS and LVS sees opens; a missing text row
+// drops every port label and LVS reports zero ports. Both are warnings at
+// most, in tools that scroll. Declare the stack; require the map to cover it.
+let layers = [ "M1","M2","M3","M4","M5","M6",
+               "VIA1","VIA2","VIA3","VIA4","VIA5",
+               "M1.NAME","M2.NAME","M3.NAME","M4.NAME" ]
+assert_map_total(R + "/stream.map", layers)
+print("gate 2: the stream map covers the routing stack, pin text included")
+
+// ---- STEP 1: synthesis.
+// NOTE the batch script is declared as an INPUT, not just named in the
+// command. The cache is exactly as sound as the declaration: a file that the
+// step reads but does not declare will not invalidate the cache when it
+// changes, and you will get a stale result that looks fresh.
+step("synth", "sbatch --wait " + R + "/synth.sbatch",
+     rtl + libs + [ R + "/synth.tcl", R + "/synth.sbatch" ],
+     [ R + "/syn/top.v", R + "/syn/top.sdc" ])
+
+// ---- STEP 2: place & route through stream-out.
+step("pnr", "sbatch --wait " + R + "/pnr.sbatch",
+     [ R + "/syn/top.v",  R + "/syn/top.sdc",
+       R + "/pnr.tcl",    R + "/mmmc.tcl",   R + "/pnr.sbatch",
+       W + "/lef/tech.lef",
+       PDK + "/lef/stdcells.lef",
+       R + "/stream.map" ] + libs,
+     [ R + "/pnr/top_routed.v", W + "/gds/top.gds", R + "/pnr/pins.csv" ])
+
+// ---- STEP 3: deterministic pin-label injection.
+// Place-and-route tools have streamed zero pin text under a map that did not
+// declare text rows -- a warning, and a run of LVS results reading "Ports: 0
+// vs N" that nobody connected to it. This step is a pure function of
+// (gds, pins.csv), so it caches like any other.
+step("labels", "python3 " + R + "/add_pin_labels.py top "
+             + W + "/gds/top.gds "
+             + R + "/pnr/pins.csv "
+             + W + "/gds/top_labeled.gds 200",
+     [ W + "/gds/top.gds", R + "/pnr/pins.csv",
+       R + "/add_pin_labels.py" ],
+     [ W + "/gds/top_labeled.gds" ])
+
+// ---- STEP 4: DRC + LVS signoff.
+step("signoff", "sbatch --wait " + R + "/signoff.sbatch",
+     [ W + "/gds/top_labeled.gds", R + "/pnr/top_routed.v",
+       R + "/signoff.sbatch",
+       PDK + "/drc/rules.drc", PDK + "/lvs/rules.lvs",
+       PDK + "/lvs/cells.spi" ],
+     [ R + "/signoff/drc.summary", R + "/signoff/lvs.rep" ])
+
+print("flow complete: RTL -> GDS -> signoff")

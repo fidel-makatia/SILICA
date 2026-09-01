@@ -1,0 +1,43 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.8", "3.9", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install (with the KLayout backend)
+        run: pip install -e ".[klayout]"
+      - name: Core semantics + conformance corpus (reference backend)
+        run: python tests/test_core.py
+      - name: Language core and name strictness
+        run: python tests/test_lang.py
+      - name: Flow layer
+        run: python tests/test_flow.py
+      - name: Command line
+        run: python tests/test_cli.py
+      - name: Shipped examples
+        run: python tests/test_examples.py
+      - name: Same-decisions conformance (KLayout backend)
+        run: python tests/test_backend_klayout.py
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install flake8
+      - run: flake8 --max-line-length 100 silica tests examples/add_pin_labels.py

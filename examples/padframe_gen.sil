@@ -1,0 +1,42 @@
+// A parametric pad row: a loop, not several hundred hand-written polygons.
+//
+// Every placement carries its connectivity declaration, every label is checked
+// attached to metal, and the spacing assertion runs before anything commits.
+// An off-by-one in the pitch becomes a rollback with coordinates, at author
+// time -- not a discovery during fab week.
+//
+// Run:  silica examples/padframe_gen.sil
+//
+// Layer numbers, the grid, the rule values and the pad footprint below are
+// illustrative placeholders. Substitute your own.
+
+design "padring.gds" top padring units nm grid 10
+
+stack {
+  metal m6 = (6,0)
+}
+
+rules {
+  m6.width >= 100
+  m6.space >= 100
+}
+
+invariants { connectivity }
+
+// a generic 50 x 60 um pad body on a computed pitch
+fn pad(i, pitch) {
+  return box(i*pitch, 0, i*pitch + 50000, 60000)
+}
+
+let n = 8
+let pitch = 55000
+
+tx place_pads {
+  for i in range(0, n) {
+    add m6 pad(i, pitch) on new_net
+    label m6 "PAD_" + str(i) at (i*pitch + 25000, 30000)
+  }
+  assert spacing(m6, window(0, 0, n*pitch, 60000)) >= 100
+}
+
+print("placed " + str(n) + " pads at pitch " + str(pitch) + " nm")

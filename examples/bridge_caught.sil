@@ -1,0 +1,35 @@
+// A bridging edit, caught at commit.
+//
+// The failure this replays: a hand-rolled edit guard with a cross-layer
+// exemption bug allowed a "connection bar" that spanned two independent
+// wires. The tool reported success. The short was found much later, by a
+// separately maintained conductor count.
+//
+// In SILICA the same edit cannot report success: `add ... on net_at(...)`
+// declares WHICH net the shape extends, and a shape that touches two nets
+// fails the transaction with both net ids attached.
+//
+// Run:  silica examples/bridge_caught.sil
+//
+// Layer numbers and the grid below are illustrative placeholders.
+
+design "chip.gds" top chip units nm grid 10
+
+stack {
+  metal m5 = (5,0)
+  metal m6 = (6,0)
+  via   v5 = (105,0) connects (m5,m6)
+}
+
+invariants { connectivity }
+
+// Two router wires on m6, distinct nets.
+tx seed {
+  add m6 box(0,   0, 1000, 100) on new_net
+  add m6 box(0, 200, 1000, 300) on new_net
+}
+
+// The bar the buggy guard allowed: it spans both wires.
+tx bad_bridge {
+  add m6 box(400, 0, 500, 300) on net_at(m6, 100, 50)
+}

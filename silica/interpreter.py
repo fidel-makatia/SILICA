@@ -1,0 +1,1282 @@
+#!/usr/bin/env python3
+"""SILICA reference interpreter.
+
+SILICA is a full general-purpose language (functions, control flow,
+integer/string/list values) whose built-in effects are transactional edits to a
+design database. The runtime is TOOL-AGNOSTIC: the interpreter speaks only the
+backend protocol below. `silica.Design` is the pure-Python reference backend;
+`silica/backends/klayout.py` adapts KLayout. Nothing in the interpreter knows
+which backend it is driving.
+
+Backend protocol (all geometry crosses the interface as integer-DBU Box):
+    declare_metal(name, num, dtype) / declare_via(name, num, dtype, a, b)
+    clone() -> backend                  shadow copy for tx execution
+    absorb(shadow)                      commit: adopt the shadow's state
+    add(layer, box) / sub(layer, box)   geometry writes
+    add_label(layer, text, x, y)
+    on_metal(layer, x, y) -> bool
+    nets() -> {net_id: members}         connectivity partition
+    net_count() -> int
+    net_at(layer, x, y) -> net_id | None
+    nets_touching(layer, box) -> [net_id]   nets the box would connect to
+    spacing_violation(layer, win, limit) -> measured | None
+    width_violation(layer, win, limit)   -> measured | None
+
+Both measurements take the limit they are being judged against, so a backend
+built on a real DRC engine can hand the query straight to it instead of
+computing a global minimum and having the caller compare. They return the
+worst measurement strictly below `limit`, or None when there is no violation.
+Backends must agree on the VERDICT; the reported measurement may differ for
+non-rectangular geometry (see the KLayout adapter's documented boundary).
+
+Net ids are opaque to the interpreter, which only compares them for equality.
+Backends must make them STABLE (independent of insertion order and of shape
+indices) and printable, because they are reported in counterexamples.
+
+Principles, each answering a class of field bug:
+  * integer DBU only; off-grid box construction is a hard error
+  * `/` divides exactly or errors -- SILICA never rounds a coordinate
+  * Box(x1,y1,x2,y2) requires x2>x1 and y2>y1 -- no silent normalization
+  * `add ... on <net>` must touch exactly that net (no bridges, no floats)
+  * `sub` may not change the net count unless declared `splitting`/`deleting`
+  * labels must attach to metal; floating labels fail the tx
+  * every layer, invariant and rule kind named in a program must be declared
+    and implemented -- an unrecognized name is an error, never a silent no-op
+  * there is no warning class
+"""
+import copy
+import json
+import re
+import sys
+
+# ----------------------------------------------------------------------------
+# errors
+
+
+class SilicaError(Exception):
+    """Base class for every error SILICA raises."""
+
+
+class ParseError(SilicaError):
+    """The program itself is wrong: syntax, types, or an undeclared name.
+
+    The design is never touched. Carries `line` (1-based, 0 if unknown) and a
+    machine-readable `data` dict so agent front-ends get the same structured
+    channel they get for commit failures.
+    """
+
+    def __init__(self, message, line=0):
+        self.line = line
+        self.message = message
+        self.data = {"error": "program", "line": line, "message": message}
+        super().__init__("line %d: %s" % (line, message) if line else message)
+
+
+class Counterexample(SilicaError):
+    """A commit failure: the program is well-formed, the edit is illegal here.
+
+    This is the normal agent feedback channel, not an exception path.
+    """
+
+    def __init__(self, check, rule, box, nets, note=""):
+        self.data = {"check": check, "rule": rule, "box": box,
+                     "nets": sorted(str(n) for n in nets), "note": note}
+        super().__init__(json.dumps(self.data))
+
+
+class _Return(Exception):
+    def __init__(self, value):
+        self.value = value
+
+
+# ----------------------------------------------------------------------------
+# geometry engine (pure python; O(n^2) merges -- reference semantics, not speed)
+
+
+class Box:
+    __slots__ = ("x1", "y1", "x2", "y2")
+
+    def __init__(self, x1, y1, x2, y2):
+        if not (x2 > x1 and y2 > y1):
+            raise ParseError("degenerate/inverted box (%s,%s,%s,%s) -- "
+                             "SILICA never normalizes geometry"
+                             % (x1, y1, x2, y2))
+        self.x1, self.y1, self.x2, self.y2 = x1, y1, x2, y2
+
+    def touches(self, o):        # overlap or edge/corner abutment
+        return not (o.x1 > self.x2 or o.x2 < self.x1 or
+                    o.y1 > self.y2 or o.y2 < self.y1)
+
+    def overlaps_open(self, o):  # strict interior overlap
+        return (o.x1 < self.x2 and o.x2 > self.x1 and
+                o.y1 < self.y2 and o.y2 > self.y1)
+
+    def contains_pt(self, x, y):
+        return self.x1 <= x <= self.x2 and self.y1 <= y <= self.y2
+
+    def gap_to(self, o):
+        dx = max(o.x1 - self.x2, self.x1 - o.x2, 0)
+        dy = max(o.y1 - self.y2, self.y1 - o.y2, 0)
+        return (dx * dx + dy * dy) ** 0.5 if (dx and dy) else max(dx, dy)
+
+    def minus(self, o):
+        if not self.overlaps_open(o):
+            return [self]
+        out = []
+        if o.x1 > self.x1:
+            out.append(Box(self.x1, self.y1, o.x1, self.y2))
+        if o.x2 < self.x2:
+            out.append(Box(o.x2, self.y1, self.x2, self.y2))
+        lo, hi = max(self.x1, o.x1), min(self.x2, o.x2)
+        if lo < hi:
+            if o.y1 > self.y1:
+                out.append(Box(lo, self.y1, hi, o.y1))
+            if o.y2 < self.y2:
+                out.append(Box(lo, o.y2, hi, self.y2))
+        return out
+
+    def as_list(self):
+        return [self.x1, self.y1, self.x2, self.y2]
+
+    def __repr__(self):
+        return "(%d,%d,%d,%d)" % (self.x1, self.y1, self.x2, self.y2)
+
+
+def union_rect(a, b):
+    """The union of two boxes when that union is itself a rectangle, else None.
+
+    The reference backend keeps geometry in this canonical, maximally-coalesced
+    form so that a measurement like `width` sees the same decomposition a
+    merging backend (KLayout) sees. Without it, one wire stored as two abutting
+    boxes would measure as two narrow shapes on one backend and one wide shape
+    on the other -- the same program reaching different verdicts.
+    """
+    if a.x1 <= b.x1 and a.y1 <= b.y1 and a.x2 >= b.x2 and a.y2 >= b.y2:
+        return a
+    if b.x1 <= a.x1 and b.y1 <= a.y1 and b.x2 >= a.x2 and b.y2 >= a.y2:
+        return b
+    if a.x1 == b.x1 and a.x2 == b.x2 and b.y1 <= a.y2 and a.y1 <= b.y2:
+        return Box(a.x1, min(a.y1, b.y1), a.x2, max(a.y2, b.y2))
+    if a.y1 == b.y1 and a.y2 == b.y2 and b.x1 <= a.x2 and a.x1 <= b.x2:
+        return Box(min(a.x1, b.x1), a.y1, max(a.x2, b.x2), a.y2)
+    return None
+
+
+class UF:
+    def __init__(self):
+        self.p = {}
+
+    def find(self, a):
+        self.p.setdefault(a, a)
+        while self.p[a] != a:
+            self.p[a] = self.p[self.p[a]]
+            a = self.p[a]
+        return a
+
+    def union(self, a, b):
+        self.p[self.find(a)] = self.find(b)
+
+
+class Design:
+    """Pure-Python reference backend. Implements the full backend protocol."""
+
+    def __init__(self):
+        self.shapes = {}     # layer name -> [Box]
+        self.labels = []     # (layer, text, x, y)
+        self.metals = {}     # name -> (l,d)
+        self.vias = {}       # name -> ((l,d), (metal_a, metal_b))
+
+    # -- protocol: declarations / lifecycle --
+    def declare_metal(self, name, num, dtype):
+        self.metals[name] = (num, dtype)
+
+    def declare_via(self, name, num, dtype, ma, mb):
+        self.vias[name] = ((num, dtype), (ma, mb))
+
+    def clone(self):
+        return copy.deepcopy(self)
+
+    def absorb(self, shadow):
+        self.shapes, self.labels = shadow.shapes, shadow.labels
+        self.metals, self.vias = shadow.metals, shadow.vias
+
+    # -- protocol: writes --
+    def _insert(self, layer, box):
+        """Append without coalescing. Internal: used by the touched-net probe,
+        which needs to know exactly which entry it just added."""
+        self.shapes.setdefault(layer, []).append(box)
+
+    def _coalesce_from(self, layer, idx):
+        """Absorb neighbours into shapes[layer][idx] while the union stays a
+        rectangle. O(n) per merge, so a run of n adds stays O(n^2) overall --
+        the same order as the rest of this reference engine."""
+        bxs = self.shapes[layer]
+        merged = True
+        while merged:
+            merged = False
+            for j in range(len(bxs)):
+                if j == idx:
+                    continue
+                u = union_rect(bxs[idx], bxs[j])
+                if u is not None:
+                    bxs[idx] = u
+                    bxs.pop(j)
+                    if j < idx:
+                        idx -= 1
+                    merged = True
+                    break
+        return idx
+
+    def add(self, layer, box):
+        self._insert(layer, box)
+        self._coalesce_from(layer, len(self.shapes[layer]) - 1)
+
+    def sub(self, layer, box):
+        out = []
+        for s in self.shapes.get(layer, []):
+            out.extend(s.minus(box))
+        self.shapes[layer] = out
+        i = 0
+        while i < len(self.shapes[layer]):
+            i = self._coalesce_from(layer, i) + 1
+
+    def add_label(self, layer, text, x, y):
+        self.labels.append((layer, text, x, y))
+
+    # -- protocol: connectivity --
+    def _net_id(self, members):
+        """A stable, printable id for a net: its lowest shape's layer+corner.
+
+        Shape indices shift on every edit, so they cannot be the identity.
+        Two distinct nets cannot share a lowest shape, so this is unique.
+        """
+        best = None
+        for (m, i) in members:
+            b = self.shapes[m][i]
+            key = (m, b.x1, b.y1)
+            if best is None or key < best:
+                best = key
+        return "%s@%d,%d" % best
+
+    def nets(self):
+        uf = UF()
+        for m in self.metals:
+            bxs = self.shapes.get(m, [])
+            for i in range(len(bxs)):
+                uf.find((m, i))
+            for i in range(len(bxs)):
+                for j in range(i + 1, len(bxs)):
+                    if bxs[i].touches(bxs[j]):
+                        uf.union((m, i), (m, j))
+        for vname, (_, (ma, mb)) in self.vias.items():
+            for v in self.shapes.get(vname, []):
+                anchor = None
+                for m in (ma, mb):
+                    for i, b in enumerate(self.shapes.get(m, [])):
+                        if v.overlaps_open(b) or v.touches(b):
+                            if anchor is None:
+                                anchor = (m, i)
+                            else:
+                                uf.union(anchor, (m, i))
+        parts = {}
+        for m in self.metals:
+            for i in range(len(self.shapes.get(m, []))):
+                parts.setdefault(uf.find((m, i)), set()).add((m, i))
+        return dict((self._net_id(mem), frozenset(mem))
+                    for mem in parts.values())
+
+    def net_count(self):
+        return len(self.nets())
+
+    def net_at(self, layer, x, y):
+        for i, b in enumerate(self.shapes.get(layer, [])):
+            if b.contains_pt(x, y):
+                for nid, members in self.nets().items():
+                    if (layer, i) in members:
+                        return nid
+        return None
+
+    def on_metal(self, layer, x, y):
+        return any(b.contains_pt(x, y) for b in self.shapes.get(layer, []))
+
+    def nets_touching(self, layer, box):
+        # via layers: the cut's touched nets are those of BOTH connected metals
+        if layer in self.vias:
+            _, (ma, mb) = self.vias[layer]
+            pre = self.nets()
+            touched = []
+            for m in (ma, mb):
+                for i, b in enumerate(self.shapes.get(m, [])):
+                    if box.touches(b):
+                        for nid, mem in pre.items():
+                            if (m, i) in mem and nid not in touched:
+                                touched.append(nid)
+            return touched
+        # metal layers: probe-union (also captures via-mediated connection)
+        pre = self.nets()
+        probe = self.clone()
+        probe._insert(layer, box)
+        idx = len(probe.shapes[layer]) - 1
+        members = set()
+        for mem in probe.nets().values():
+            if (layer, idx) in mem:
+                members = set(mem) - {(layer, idx)}
+                break
+        touched = []
+        for nid, mem in pre.items():
+            if set(mem) & members and nid not in touched:
+                touched.append(nid)
+        return touched
+
+    # -- protocol: measurements --
+    def spacing_violation(self, layer, win, limit):
+        """Worst gap below `limit` between shapes of DISTINCT nets, or None."""
+        owner = {}
+        for nid, members in self.nets().items():
+            for (m, i) in members:
+                if m == layer:
+                    owner[i] = nid
+        bxs = self.shapes.get(layer, [])
+        idx = [i for i, b in enumerate(bxs) if b.touches(win)]
+        worst = None
+        for a in range(len(idx)):
+            for b in range(a + 1, len(idx)):
+                i, j = idx[a], idx[b]
+                if owner.get(i) == owner.get(j):
+                    continue
+                g = bxs[i].gap_to(bxs[j])
+                if g < limit and (worst is None or g < worst):
+                    worst = g
+        return worst
+
+    def width_violation(self, layer, win, limit):
+        """Narrowest shape below `limit` intersecting the window, or None.
+
+        Geometry is kept maximally coalesced (see `union_rect`), so a wire
+        stored as several abutting boxes measures as the one wide shape it is.
+        """
+        worst = None
+        for b in self.shapes.get(layer, []):
+            if b.touches(win):
+                w = min(b.x2 - b.x1, b.y2 - b.y1)
+                if w < limit and (worst is None or w < worst):
+                    worst = w
+        return worst
+
+
+# ----------------------------------------------------------------------------
+# lexer
+
+TOKEN = re.compile(
+    r'"([^"]*)"'
+    r'|([A-Za-z_][A-Za-z0-9_]*)'
+    r'|(\d+)'
+    r'|(<=|>=|==|!=|&&|\|\|)'
+    r'|([{}()\[\],.=+\-*/%<>!])')
+
+
+def lex(src):
+    """Source -> [(kind, value, line)]. Comments are `//` to end of line."""
+    toks, i, line, n = [], 0, 1, len(src)
+    while i < n:
+        c = src[i]
+        if c == "\n":
+            line += 1
+            i += 1
+            continue
+        if c.isspace():
+            i += 1
+            continue
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        m = TOKEN.match(src, i)
+        if not m:
+            raise ParseError("cannot tokenize %r" % src[i:i + 30], line)
+        start_line = line
+        line += src.count("\n", i, m.end())
+        i = m.end()
+        if m.group(1) is not None:
+            toks.append(("str", m.group(1), start_line))
+        elif m.group(2):
+            toks.append(("id", m.group(2), start_line))
+        elif m.group(3):
+            toks.append(("int", int(m.group(3)), start_line))
+        elif m.group(4):
+            toks.append(("sym", m.group(4), start_line))
+        else:
+            toks.append(("sym", m.group(5), start_line))
+    return toks
+
+
+# ----------------------------------------------------------------------------
+# parser -- full language, recursive descent with precedence climbing
+
+RULE_KINDS_IMPLEMENTED = ("width", "space")
+RULE_KINDS_SPECIFIED = ("enclosure", "area", "density")
+INVARIANTS_IMPLEMENTED = ("connectivity",)
+INVARIANTS_SPECIFIED = ("ports", "density", "schema")
+CHECKS_IMPLEMENTED = ("spacing", "width")
+
+
+class Parser:
+    """Produces statements as (node, line) pairs; blocks are lists of pairs."""
+
+    def __init__(self, toks):
+        self.t, self.i = toks, 0
+
+    def _tok(self):
+        if self.i < len(self.t):
+            return self.t[self.i]
+        return ("eof", "", self.t[-1][2] if self.t else 1)
+
+    def peek(self):
+        k, v, _ = self._tok()
+        return (k, v)
+
+    def line(self):
+        return self._tok()[2]
+
+    def next(self):
+        k, v, _ = self._tok()
+        self.i += 1
+        return (k, v)
+
+    def err(self, msg):
+        return ParseError(msg, self.line())
+
+    def expect(self, kind, val=None):
+        ln = self.line()
+        k, v = self.next()
+        if k != kind or (val is not None and v != val):
+            raise ParseError("expected %s, got %r" % (val or kind, v), ln)
+        return v
+
+    def accept(self, kind, val):
+        k, v = self.peek()
+        if k == kind and v == val:
+            self.i += 1
+            return True
+        return False
+
+    def kw(self, word):
+        self.expect("id", word)
+
+    def parse(self):
+        stmts = []
+        while self.peek()[0] != "eof":
+            stmts.append(self.stmt())
+        return stmts
+
+    def block(self):
+        self.expect("sym", "{")
+        stmts = []
+        while not self.accept("sym", "}"):
+            if self.peek()[0] == "eof":
+                raise self.err("unterminated block")
+            stmts.append(self.stmt())
+        return stmts
+
+    def stmt(self):
+        """Returns (node, line)."""
+        ln = self.line()
+        return (self._stmt_node(), ln)
+
+    def _stmt_node(self):
+        k, v = self.peek()
+        if k == "id":
+            if v == "design":
+                return self.design_decl()
+            if v == "stack":
+                return self.stack_decl()
+            if v == "rules":
+                return self.rules_decl()
+            if v == "invariants":
+                return self.inv_decl()
+            if v == "fn":
+                return self.fn_decl()
+            if v == "let":
+                self.next()
+                name = self.expect("id")
+                self.expect("sym", "=")
+                return ("let", name, self.expr())
+            if v == "if":
+                return self.if_stmt()
+            if v == "while":
+                self.next()
+                c = self.expr()
+                return ("while", c, self.block())
+            if v == "for":
+                self.next()
+                var = self.expect("id")
+                self.kw("in")
+                return ("for", var, self.expr(), self.block())
+            if v == "return":
+                self.next()
+                if self.peek() == ("sym", "}"):
+                    return ("return", None)
+                return ("return", self.expr())
+            if v == "tx":
+                self.next()
+                name = self.expect("id")
+                return ("tx", name, self.block())
+            if v == "add":
+                self.next()
+                layer = self.expect("id")
+                bx = self.expr()
+                self.kw("on")
+                return ("add", layer, bx, self.net_expr())
+            if v == "sub":
+                self.next()
+                layer = self.expect("id")
+                bx = self.expr()
+                mods = set()
+                while True:
+                    if self.accept("id", "splitting"):
+                        mods.add("splitting")
+                    elif self.accept("id", "deleting"):
+                        mods.add("deleting")
+                    else:
+                        break
+                return ("sub", layer, bx, mods)
+            if v == "label":
+                self.next()
+                layer = self.expect("id")
+                text = self.expr()
+                self.kw("at")
+                self.expect("sym", "(")
+                x = self.expr()
+                self.expect("sym", ",")
+                y = self.expr()
+                self.expect("sym", ")")
+                return ("label", layer, text, x, y)
+            if v == "assert":
+                self.next()
+                chk = self.check_expr()
+                self.expect("sym", ">=")
+                return ("assert", chk, self.expr())
+        # expression or assignment
+        e = self.expr()
+        if self.accept("sym", "="):
+            rhs = self.expr()
+            if e[0] == "var":
+                return ("assign", e[1], rhs)
+            if e[0] == "index":
+                return ("assignidx", e[1], e[2], rhs)
+            raise self.err("invalid assignment target")
+        return ("expr", e)
+
+    def design_decl(self):
+        self.kw("design")
+        f = self.expect("str")
+        self.kw("top")
+        top = self.expect("id")
+        self.kw("units")
+        ln = self.line()
+        units = self.expect("id")
+        if units not in ("nm", "um"):
+            raise ParseError("units must be `nm` or `um`, got %r" % units, ln)
+        self.kw("grid")
+        ln = self.line()
+        g = self.expect("int")
+        if g != int(g) or g < 1:
+            raise ParseError("grid must be a positive integer", ln)
+        return ("design", f, top, units, g)
+
+    def stack_decl(self):
+        self.kw("stack")
+        self.expect("sym", "{")
+        items = []
+        while not self.accept("sym", "}"):
+            ln = self.line()
+            kind = self.expect("id")
+            name = self.expect("id")
+            self.expect("sym", "=")
+            self.expect("sym", "(")
+            num = self.expect("int")
+            self.expect("sym", ",")
+            dtype = self.expect("int")
+            self.expect("sym", ")")
+            if kind == "metal":
+                items.append(("metal", name, num, dtype))
+            elif kind == "via":
+                self.kw("connects")
+                self.expect("sym", "(")
+                a = self.expect("id")
+                self.expect("sym", ",")
+                b = self.expect("id")
+                self.expect("sym", ")")
+                items.append(("via", name, num, dtype, a, b))
+            else:
+                raise ParseError("unknown stack item %r -- expected `metal` "
+                                 "or `via`" % kind, ln)
+        return ("stack", items)
+
+    def rules_decl(self):
+        self.kw("rules")
+        self.expect("sym", "{")
+        rules = []
+        while not self.accept("sym", "}"):
+            ln = self.line()
+            layer = self.expect("id")
+            self.expect("sym", ".")
+            kind = self.expect("id")
+            if kind in RULE_KINDS_SPECIFIED:
+                raise ParseError(
+                    "rule kind `%s` is specified but not implemented -- "
+                    "SILICA will not accept a rule it cannot check" % kind, ln)
+            if kind not in RULE_KINDS_IMPLEMENTED:
+                raise ParseError(
+                    "unknown rule kind %r (implemented: %s)"
+                    % (kind, ", ".join(RULE_KINDS_IMPLEMENTED)), ln)
+            if self.peek() == ("sym", "("):
+                raise ParseError(
+                    "conditional rules (`%s.%s(...)`) are in the grammar but "
+                    "not checked yet -- SILICA will not accept a rule it "
+                    "cannot check" % (layer, kind), ln)
+            self.expect("sym", ">=")
+            rules.append((layer, kind, self.expr(), ln))
+        return ("rules", rules)
+
+    def inv_decl(self):
+        self.kw("invariants")
+        self.expect("sym", "{")
+        names = []
+        while True:
+            ln = self.line()
+            name = self.expect("id")
+            if name in INVARIANTS_SPECIFIED:
+                raise ParseError(
+                    "invariant `%s` is specified but not implemented -- "
+                    "declaring it would be a silent no-op" % name, ln)
+            if name not in INVARIANTS_IMPLEMENTED:
+                raise ParseError(
+                    "unknown invariant %r (implemented: %s)"
+                    % (name, ", ".join(INVARIANTS_IMPLEMENTED)), ln)
+            names.append(name)
+            if not self.accept("sym", ","):
+                break
+        self.expect("sym", "}")
+        return ("inv", names)
+
+    def fn_decl(self):
+        self.kw("fn")
+        name = self.expect("id")
+        self.expect("sym", "(")
+        params = []
+        if not self.accept("sym", ")"):
+            params.append(self.expect("id"))
+            while self.accept("sym", ","):
+                params.append(self.expect("id"))
+            self.expect("sym", ")")
+        return ("fn", name, params, self.block())
+
+    def if_stmt(self):
+        self.kw("if")
+        c = self.expr()
+        then = self.block()
+        els = None
+        if self.accept("id", "else"):
+            if self.peek() == ("id", "if"):
+                ln = self.line()
+                els = [(self.if_stmt(), ln)]
+            else:
+                els = self.block()
+        return ("if", c, then, els)
+
+    def net_expr(self):
+        ln = self.line()
+        k, v = self.peek()
+        if v == "new_net":
+            self.next()
+            return ("newnet",)
+        if v == "net_at":
+            self.next()
+            self.expect("sym", "(")
+            layer = self.expect("id")
+            self.expect("sym", ",")
+            x = self.expr()
+            self.expect("sym", ",")
+            y = self.expr()
+            self.expect("sym", ")")
+            return ("netat", layer, x, y)
+        if v == "merge":
+            self.next()
+            self.expect("sym", "(")
+            a = self.net_expr()
+            self.expect("sym", ",")
+            b = self.net_expr()
+            self.expect("sym", ")")
+            return ("merge", a, b)
+        raise ParseError("expected a net expression (`new_net`, `net_at(..)` "
+                         "or `merge(..)`), got %r" % v, ln)
+
+    def check_expr(self):
+        ln = self.line()
+        name = self.expect("id")
+        if name not in CHECKS_IMPLEMENTED:
+            raise ParseError("unknown check %r (implemented: %s)"
+                             % (name, ", ".join(CHECKS_IMPLEMENTED)), ln)
+        self.expect("sym", "(")
+        layer = self.expect("id")
+        self.expect("sym", ",")
+        self.kw("window")
+        self.expect("sym", "(")
+        es = [self.expr()]
+        for _ in range(3):
+            self.expect("sym", ",")
+            es.append(self.expr())
+        self.expect("sym", ")")
+        self.expect("sym", ")")
+        return ("check", name, layer, es, ln)
+
+    # ---- expressions ----
+    def _match_ops(self, *ops):
+        k, v = self.peek()
+        if (k == "sym" or k == "id") and v in ops:
+            self.i += 1
+            return v
+        return None
+
+    def expr(self):
+        return self.p_or()
+
+    def p_or(self):
+        e = self.p_and()
+        while self._match_ops("||", "or"):
+            e = ("bin", "or", e, self.p_and())
+        return e
+
+    def p_and(self):
+        e = self.p_eq()
+        while self._match_ops("&&", "and"):
+            e = ("bin", "and", e, self.p_eq())
+        return e
+
+    def p_eq(self):
+        e = self.p_cmp()
+        while True:
+            op = self._match_ops("==", "!=")
+            if not op:
+                return e
+            e = ("bin", op, e, self.p_cmp())
+
+    def p_cmp(self):
+        e = self.p_add()
+        while True:
+            op = self._match_ops("<", ">", "<=", ">=")
+            if not op:
+                return e
+            e = ("bin", op, e, self.p_add())
+
+    def p_add(self):
+        e = self.p_mul()
+        while True:
+            op = self._match_ops("+", "-")
+            if not op:
+                return e
+            e = ("bin", op, e, self.p_mul())
+
+    def p_mul(self):
+        e = self.p_un()
+        while True:
+            op = self._match_ops("*", "/", "%")
+            if not op:
+                return e
+            e = ("bin", op, e, self.p_un())
+
+    def p_un(self):
+        if self._match_ops("-"):
+            return ("un", "-", self.p_un())
+        if self._match_ops("!", "not"):
+            return ("un", "not", self.p_un())
+        return self.p_post()
+
+    def p_post(self):
+        e = self.p_prim()
+        while True:
+            if self.accept("sym", "("):
+                args = []
+                if not self.accept("sym", ")"):
+                    args.append(self.expr())
+                    while self.accept("sym", ","):
+                        args.append(self.expr())
+                    self.expect("sym", ")")
+                e = ("call", e, args)
+            elif self.accept("sym", "["):
+                idx = self.expr()
+                self.expect("sym", "]")
+                e = ("index", e, idx)
+            else:
+                return e
+
+    def p_prim(self):
+        ln = self.line()
+        k, v = self.next()
+        if k == "int":
+            return ("int", v)
+        if k == "str":
+            return ("str", v)
+        if k == "id":
+            if v == "true":
+                return ("bool", True)
+            if v == "false":
+                return ("bool", False)
+            return ("var", v)
+        if k == "sym" and v == "(":
+            e = self.expr()
+            self.expect("sym", ")")
+            return e
+        if k == "sym" and v == "[":
+            items = []
+            if self.peek() != ("sym", "]"):
+                items.append(self.expr())
+                while self.accept("sym", ","):
+                    items.append(self.expr())
+            self.expect("sym", "]")
+            return ("list", items)
+        raise ParseError("unexpected token %r" % v, ln)
+
+
+# ----------------------------------------------------------------------------
+# evaluator
+
+
+def truthy(v):
+    return bool(v)
+
+
+class Env:
+    def __init__(self, parent=None):
+        self.v, self.parent = {}, parent
+
+    def get(self, n):
+        e = self
+        while e:
+            if n in e.v:
+                return e.v[n]
+            e = e.parent
+        raise ParseError("undefined name %r" % n)
+
+    def define(self, n, val):
+        self.v[n] = val
+
+    def assign(self, n, val):
+        e = self
+        while e:
+            if n in e.v:
+                e.v[n] = val
+                return
+            e = e.parent
+        raise ParseError("assignment to undefined name %r" % n)
+
+
+class Func:
+    def __init__(self, name, params, body, env):
+        self.name, self.params, self.body, self.env = name, params, body, env
+
+
+_DECLS = {"design", "stack", "rules", "inv", "fn"}
+
+
+class Interp:
+    def __init__(self, prog, design=None):
+        self.prog = prog
+        self.backend = design if design is not None else Design()
+        self.grid, self.units = 1, "nm"
+        self.rules, self.invariants = [], set()
+        self.metals, self.vias = set(), set()
+        self.results = []
+        self.txctx = None
+        self.cur_line = 0
+        self.genv = Env()
+        builtins = {"print": print, "len": len, "str": str, "abs": abs,
+                    "min": min, "max": max,
+                    "range": lambda *a: list(range(*a)),
+                    "append": lambda seq, x: seq.append(x)}
+        for name, f in builtins.items():
+            self.genv.define(name, f)
+        # a backend handed in pre-populated (tests, embedding) still declares
+        # its layers to the interpreter, so layer validation works
+        self.metals |= set(getattr(self.backend, "metals", {}) or {})
+        self.vias |= set(getattr(self.backend, "vias", {}) or {})
+
+    def run(self):
+        try:
+            for node, line in self.prog:
+                self.cur_line = line
+                self.exec_stmt(node, self.genv)
+        except _Return:
+            raise ParseError("`return` outside a function", self.cur_line)
+        except ParseError as e:
+            if not e.line:
+                raise ParseError(e.message, self.cur_line)
+            raise
+        return self.results
+
+    # ---- name validation ----
+    def _known_layer(self, name, where):
+        if name not in self.metals and name not in self.vias:
+            known = sorted(self.metals | self.vias)
+            raise ParseError(
+                "%s: layer %r is not declared in `stack` (declared: %s)"
+                % (where, name, ", ".join(known) if known else "none"),
+                self.cur_line)
+
+    def _known_metal(self, name, where):
+        self._known_layer(name, where)
+        if name not in self.metals:
+            raise ParseError("%s: %r is a via layer; a metal layer is required"
+                             % (where, name), self.cur_line)
+
+    # ---- statements ----
+    def exec_block(self, stmts, env):
+        for node, line in stmts:
+            self.cur_line = line
+            self.exec_stmt(node, env)
+
+    def exec_stmt(self, s, env):
+        t = s[0]
+        if t in _DECLS and self.txctx is not None:
+            raise ParseError("declaration `%s` is not allowed inside a tx" % t,
+                             self.cur_line)
+        if t == "design":
+            self.units, self.grid = s[3], s[4]
+        elif t == "stack":
+            for it in s[1]:
+                if it[0] == "metal":
+                    self.backend.declare_metal(it[1], it[2], it[3])
+                    self.metals.add(it[1])
+                else:
+                    self._known_metal(it[4], "stack %s connects" % it[1])
+                    self._known_metal(it[5], "stack %s connects" % it[1])
+                    self.backend.declare_via(it[1], it[2], it[3], it[4], it[5])
+                    self.vias.add(it[1])
+        elif t == "rules":
+            for (layer, kind, val, line) in s[1]:
+                self.cur_line = line
+                self._known_layer(layer, "rules")
+                self.rules.append((layer, kind, self.eval(val, env)))
+        elif t == "inv":
+            self.invariants.update(s[1])
+        elif t == "fn":
+            env.define(s[1], Func(s[1], s[2], s[3], env))
+        elif t == "let":
+            env.define(s[1], self.eval(s[2], env))
+        elif t == "assign":
+            env.assign(s[1], self.eval(s[2], env))
+        elif t == "assignidx":
+            seq = self.eval(s[1], env)
+            seq[self.eval(s[2], env)] = self.eval(s[3], env)
+        elif t == "if":
+            if truthy(self.eval(s[1], env)):
+                self.exec_block(s[2], Env(env))
+            elif s[3] is not None:
+                self.exec_block(s[3], Env(env))
+        elif t == "while":
+            while truthy(self.eval(s[1], env)):
+                self.exec_block(s[2], Env(env))
+        elif t == "for":
+            seq = self.eval(s[2], env)
+            if not isinstance(seq, list):
+                raise ParseError("`for` iterates a list", self.cur_line)
+            for v in seq:
+                b = Env(env)
+                b.define(s[1], v)
+                self.exec_block(s[3], b)
+        elif t == "return":
+            raise _Return(self.eval(s[1], env) if s[1] is not None else None)
+        elif t == "expr":
+            self.eval(s[1], env)
+        elif t == "tx":
+            self.exec_tx(s[1], s[2], env)
+        elif t == "add":
+            self.exec_add(s, env)
+        elif t == "sub":
+            self.exec_sub(s, env)
+        elif t == "label":
+            self.exec_label(s, env)
+        elif t == "assert":
+            self.exec_assert(s, env)
+        else:
+            raise ParseError("unimplemented statement %r" % t, self.cur_line)
+
+    # ---- transactions ----
+    def exec_tx(self, name, body, env):
+        if self.txctx is not None:
+            raise ParseError("nested tx is not allowed", self.cur_line)
+        shadow = self.backend.clone()
+        ctx = type("Ctx", (), {})()
+        ctx.shadow = shadow
+        ctx.pre = shadow.net_count()
+        ctx.declared_new = ctx.allowed_extra = 0
+        ctx.touched = []
+        self.txctx = ctx
+        try:
+            self.exec_block(body, Env(env))
+            self.check_commit(ctx)
+        except Counterexample as ce:
+            self.results.append((name, False, ce.data))
+            return
+        finally:
+            self.txctx = None
+        self.backend.absorb(shadow)
+        self.results.append((name, True, None))
+
+    def _tx(self, what):
+        if self.txctx is None:
+            raise ParseError("`%s` is only allowed inside a tx" % what,
+                             self.cur_line)
+        return self.txctx
+
+    def _grid(self, *vals):
+        for v in vals:
+            if not isinstance(v, int):
+                raise ParseError("coordinates must be integers, got %r" % (v,),
+                                 self.cur_line)
+            if v % self.grid:
+                raise ParseError("off-grid coordinate %d (grid %d)"
+                                 % (v, self.grid), self.cur_line)
+
+    def _eval_box(self, e, env):
+        v = self.eval(e, env)
+        if not isinstance(v, Box):
+            raise ParseError("expected a box value, got %r" % (v,),
+                             self.cur_line)
+        return v
+
+    def _resolve_net(self, ne, sh, env):
+        if ne[0] != "netat":
+            raise ParseError("merge() takes net_at() operands", self.cur_line)
+        self._known_layer(ne[1], "net_at")
+        x, y = self.eval(ne[2], env), self.eval(ne[3], env)
+        n = sh.net_at(ne[1], x, y)
+        if n is None:
+            raise Counterexample("add.on", "no-net", [], [],
+                                 "net_at(%s, %s, %s) found no shape"
+                                 % (ne[1], x, y))
+        return n
+
+    def exec_add(self, s, env):
+        ctx = self._tx("add")
+        layer, ne = s[1], s[3]
+        self._known_layer(layer, "add")
+        box = self._eval_box(s[2], env)
+        sh = ctx.shadow
+        touched = sh.nets_touching(layer, box)
+        if ne[0] == "newnet":
+            if touched:
+                raise Counterexample("add.on", "not-new", box.as_list(),
+                                     touched,
+                                     "`new_net` shape touches existing nets")
+            ctx.declared_new += 1
+        elif ne[0] == "netat":
+            target = self._resolve_net(ne, sh, env)
+            if not touched:
+                raise Counterexample("add.on", "floating", box.as_list(), [],
+                                     "shape touches no net")
+            if len(touched) > 1:
+                raise Counterexample("add.on", "bridge", box.as_list(),
+                                     touched,
+                                     "shape would merge distinct nets")
+            if touched[0] != target:
+                raise Counterexample("add.on", "wrong-net", box.as_list(),
+                                     touched,
+                                     "shape touches a different net")
+        else:  # merge
+            a = self._resolve_net(ne[1], sh, env)
+            b = self._resolve_net(ne[2], sh, env)
+            if a == b:
+                raise Counterexample("add.on", "merge-same", box.as_list(),
+                                     [a],
+                                     "merge() operands are already one net")
+            if set(touched) != {a, b}:
+                raise Counterexample(
+                    "add.on", "merge-mismatch", box.as_list(), touched,
+                    "shape must touch exactly the two merged nets")
+            ctx.declared_new -= 1
+        sh.add(layer, box)
+        ctx.touched.append((layer, box))
+
+    def exec_sub(self, s, env):
+        ctx = self._tx("sub")
+        layer, mods = s[1], s[3]
+        self._known_layer(layer, "sub")
+        box = self._eval_box(s[2], env)
+        sh = ctx.shadow
+        before = sh.net_count()
+        sh.sub(layer, box)
+        after = sh.net_count()
+        if after > before and "splitting" not in mods:
+            raise Counterexample(
+                "sub", "split", box.as_list(), [],
+                "nets %d->%d; declare `splitting` if intended"
+                % (before, after))
+        if after < before and "deleting" not in mods:
+            raise Counterexample(
+                "sub", "delete", box.as_list(), [],
+                "nets %d->%d; declare `deleting` if intended"
+                % (before, after))
+        ctx.allowed_extra += (after - before)
+        ctx.touched.append((layer, box))
+
+    def exec_label(self, s, env):
+        ctx = self._tx("label")
+        layer = s[1]
+        self._known_metal(layer, "label")
+        text = self.eval(s[2], env)
+        if not isinstance(text, str):
+            raise ParseError("label text must be a string, got %r" % (text,),
+                             self.cur_line)
+        x, y = self.eval(s[3], env), self.eval(s[4], env)
+        self._grid(x, y)
+        if not ctx.shadow.on_metal(layer, x, y):
+            raise Counterexample("label", "floating", [x, y], [],
+                                 'label "%s" attaches to no metal' % text)
+        ctx.shadow.add_label(layer, text, x, y)
+
+    def exec_assert(self, s, env):
+        ctx = self._tx("assert")
+        _, name, layer, es, line = s[1]
+        self.cur_line = line
+        self._known_layer(layer, "assert %s" % name)
+        w = [self.eval(e, env) for e in es]
+        self._grid(*w)
+        win = Box(*w)
+        m = self.eval(s[2], env)
+        g = (ctx.shadow.spacing_violation(layer, win, m) if name == "spacing"
+             else ctx.shadow.width_violation(layer, win, m))
+        if g is not None:
+            raise Counterexample("assert", name, win.as_list(), [],
+                                 "measured %s < required %s" % (g, m))
+
+    def check_commit(self, ctx):
+        if "connectivity" in self.invariants:
+            post = ctx.shadow.net_count()
+            want = ctx.pre + ctx.declared_new + ctx.allowed_extra
+            if post != want:
+                raise Counterexample(
+                    "connectivity", "net-count", [], [],
+                    "%d+%d+%d declared, got %d"
+                    % (ctx.pre, ctx.declared_new, ctx.allowed_extra, post))
+        # local rules: evaluated on the final shadow, in the halo of every
+        # shape the tx touched -- `add` AND `sub`, so a subtraction that thins
+        # a wire below the minimum is caught exactly like an undersized add.
+        for (layer, kind, m) in self.rules:
+            for (lay, b) in ctx.touched:
+                if lay != layer:
+                    continue
+                halo = 1 if kind == "width" else 2
+                win = Box(b.x1 - halo * m, b.y1 - halo * m,
+                          b.x2 + halo * m, b.y2 + halo * m)
+                g = (ctx.shadow.width_violation(layer, win, m)
+                     if kind == "width"
+                     else ctx.shadow.spacing_violation(layer, win, m))
+                if g is not None:
+                    raise Counterexample("rules.%s" % kind,
+                                         "%s>=%s" % (layer, m),
+                                         b.as_list(), [], "measured %s" % g)
+
+    # ---- expressions ----
+    def eval(self, e, env):
+        t = e[0]
+        if t == "int" or t == "str" or t == "bool":
+            return e[1]
+        if t == "var":
+            return env.get(e[1])
+        if t == "list":
+            return [self.eval(x, env) for x in e[1]]
+        if t == "index":
+            seq = self.eval(e[1], env)
+            return seq[self.eval(e[2], env)]
+        if t == "un":
+            v = self.eval(e[2], env)
+            if e[1] == "-":
+                if not isinstance(v, int):
+                    raise ParseError("unary `-` needs an int, got %r" % (v,),
+                                     self.cur_line)
+                return -v
+            return not truthy(v)
+        if t == "bin":
+            op = e[1]
+            if op == "and":
+                return (truthy(self.eval(e[2], env)) and
+                        truthy(self.eval(e[3], env)))
+            if op == "or":
+                return (truthy(self.eval(e[2], env)) or
+                        truthy(self.eval(e[3], env)))
+            a, b = self.eval(e[2], env), self.eval(e[3], env)
+            if op == "==":
+                return a == b
+            if op == "!=":
+                return a != b
+            if op == "+":
+                for ty in (int, str, list):
+                    if isinstance(a, ty) and isinstance(b, ty):
+                        return a + b
+                raise ParseError("`+` on mismatched types (%s + %s) -- "
+                                 "SILICA never coerces"
+                                 % (type(a).__name__, type(b).__name__),
+                                 self.cur_line)
+            if op in ("<", ">", "<=", ">="):
+                if not (type(a) is type(b) and isinstance(a, (int, str))):
+                    raise ParseError("`%s` compares two ints or two strings"
+                                     % op, self.cur_line)
+                return {"<": a < b, ">": a > b,
+                        "<=": a <= b, ">=": a >= b}[op]
+            if not (isinstance(a, int) and isinstance(b, int)):
+                raise ParseError("`%s` needs ints" % op, self.cur_line)
+            if op == "-":
+                return a - b
+            if op == "*":
+                return a * b
+            if op == "/":
+                if b == 0:
+                    raise ParseError("division by zero", self.cur_line)
+                if a % b:
+                    raise ParseError("inexact division %d/%d -- SILICA never "
+                                     "rounds a coordinate" % (a, b),
+                                     self.cur_line)
+                return a // b
+            if op == "%":
+                if b == 0:
+                    raise ParseError("modulo by zero", self.cur_line)
+                return a % b
+        if t == "call":
+            callee = e[1]
+            args = [self.eval(a, env) for a in e[2]]
+            if callee[0] == "var" and callee[1] == "box":
+                if len(args) != 4 or not all(isinstance(a, int)
+                                             for a in args):
+                    raise ParseError("box(x1,y1,x2,y2) takes four ints",
+                                     self.cur_line)
+                self._grid(*args)
+                return Box(*args)
+            f = self.eval(callee, env)
+            if isinstance(f, Func):
+                if len(args) != len(f.params):
+                    raise ParseError("%s() takes %d args, got %d"
+                                     % (f.name, len(f.params), len(args)),
+                                     self.cur_line)
+                fenv = Env(f.env)
+                for p, a in zip(f.params, args):
+                    fenv.define(p, a)
+                saved = self.cur_line
+                try:
+                    self.exec_block(f.body, fenv)
+                    return None
+                except _Return as r:
+                    return r.value
+                finally:
+                    self.cur_line = saved
+            if callable(f):
+                return f(*args)
+            raise ParseError("value is not callable", self.cur_line)
+        raise ParseError("unimplemented expression %r" % t, self.cur_line)
+
+
+# ----------------------------------------------------------------------------
+if __name__ == "__main__":
+    from silica.cli import main
+    sys.exit(main())
