@@ -25,8 +25,14 @@ jobs:
         run: python tests/test_engine.py
       - name: Language core and name strictness
         run: python tests/test_lang.py
+      - name: Effect-soundness property test
+        run: python tests/test_effects.py
+      - name: Export totality
+        run: python tests/test_export.py
       - name: Flow layer
         run: python tests/test_flow.py
+      - name: Bug-injection benchmark (pins the published numbers)
+        run: python tests/test_eval.py
       - name: Command line
         run: python tests/test_cli.py
       - name: Shipped examples
@@ -42,4 +48,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install flake8
-      - run: flake8 --max-line-length 100 silica tests examples/add_pin_labels.py
+      - run: flake8 --max-line-length 100 silica tests eval/benchmark.py examples/add_pin_labels.py

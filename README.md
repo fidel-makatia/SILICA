@@ -65,7 +65,7 @@ cd SILICA
 pip install -e .            # zero dependencies; add ".[klayout]" for the KLayout backend
 
 silica examples/fix_notch.sil        # run a program
-make test                            # 147 checks across 7 suites, ~10 seconds
+make test                            # 191 checks across 10 suites, ~10 seconds
 ```
 
 ## 🧨 Why SILICA exists
@@ -199,6 +199,39 @@ that any of it is yet validated against a controlled baseline. The evaluation in
 honest third arm is a plain Python-plus-asserts wrapper, which may well capture
 most of the benefit. If it does, that is the finding.
 
+## 📊 Does it actually help? (`eval/benchmark.py`)
+
+Nine bugs from the failure taxonomy, attempted three ways. An arm "caught" a
+bug only if the **bad state never happened**, scored by a ground-truth
+predicate — not by whether it complained.
+
+```
+raw edits, no checking ......... 0/9
+a careful asserts wrapper ...... 5/9
+SILICA ......................... 9/9
+```
+
+**Quote the middle number.** A competent Python wrapper — given SILICA's own
+connectivity engine, and checking bridging, floating, width *and* spacing on
+every add, plus a conductor count across subtraction — already catches five of
+nine. Most of the value in this project is discipline, not syntax.
+
+The four it misses are the ones that need machinery a per-operation guard
+cannot have:
+
+| Bug | Why a wrapper misses it |
+|---|---|
+| a `sub` splits one net **and** deletes another | the guard counts conductors; `+1` and `−1` cancel. Needs the partition, per net |
+| a `sub` thins a wire below minimum width | guards are per-operation, and subtraction is the one people under-guard |
+| a composite edit half-applies | nothing to roll back to; the design is left in a state nobody authored |
+| stream-out drops an unmapped layer | the engineer asserts over their own list; only the design knows what it holds |
+
+Honest limit: these scenarios were written by the same person who wrote the
+runtime, so this shows **coverage against a stated taxonomy**, not unbiased
+field value. The blinded campaign replay in [`eval/PLAN.md`](eval/PLAN.md) is
+still unrun, and it is the one that would settle it. `tests/test_eval.py` pins
+these numbers so this section cannot drift from the code.
+
 ## 🏗 Architecture
 
 ```
@@ -257,7 +290,7 @@ silica/                 the language implementation
 spec/                   language definition · grammar · invariant/field-bug map
 docs/ARCHITECTURE.md    system design & where the LLM sits (and doesn't)
 examples/               runnable programs, incl. replays of real fix classes
-tests/                  7 suites / 147 checks; conformance.py is the backend contract
+tests/                  10 suites / 191 checks; conformance.py is the backend contract
 eval/                   pre-registered evaluation plan vs. a logged campaign
 ```
 

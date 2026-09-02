@@ -13,10 +13,13 @@ test:               ## run every suite
 	@set -e; for t in tests/test_*.py; do echo "== $$t"; python3 $$t; done
 
 lint:               ## style check (optional; needs flake8)
-	flake8 --max-line-length 100 silica tests examples/add_pin_labels.py
+	flake8 --max-line-length 100 silica tests eval/benchmark.py examples/add_pin_labels.py
 
 demo:               ## run the parametric pad-row example
 	python3 -m silica examples/padframe_gen.sil
+
+bench:              ## run the bug-injection benchmark
+	python3 eval/benchmark.py
 
 clean:              ## remove caches and flow traces
 	find . -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true

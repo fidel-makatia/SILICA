@@ -1,20 +1,78 @@
-# SILICA evaluation plan
+# SILICA evaluation
 
-*Pre-registered: written before the experiment, so the prediction can be wrong
-in public.*
+Three studies. The first has been run and its numbers are below and pinned by
+`tests/test_eval.py`. The other two are pre-registered and **not yet run**.
 
-> No process data appears in this plan or will appear in its results. Published
-> outputs are round counts and error-class histograms — never geometry, layer
-> numbers, rule values or deck contents.
+> No process data appears here or will appear in any result. Published outputs
+> are round counts and error-class histograms — never geometry, layer numbers,
+> rule values or deck contents.
 
-## Claim to test
+---
 
-An agent driving physical-design edits through SILICA reaches signoff-clean in
-fewer tool rounds than the same agent driving raw scripts (layout-editor Python
-plus Tcl), because the error classes that consumed rounds are caught at commit
-time with machine-readable counterexamples.
+## Study 1 — bug-injection benchmark (run)
 
-## Benchmark: a logged padframe campaign (ground truth exists)
+`python3 eval/benchmark.py`
+
+Nine bugs drawn from the failure taxonomy in `spec/invariants.md`, attempted
+through three arms:
+
+- **raw** — edits applied with no checking
+- **guarded** — a careful engineer's Python wrapper with asserts
+- **SILICA** — the same edits as transactions
+
+An arm "caught" a bug only if the **bad state never happened** — scored by a
+ground-truth predicate over the resulting design or artifact, not by whether
+the arm complained.
+
+The guarded arm is deliberately strong. It is given SILICA's own connectivity
+engine, so the comparison isolates *what a wrapper remembers to check* rather
+than whose geometry code is better, and it checks bridging, floating, width
+**and** spacing on everything it adds, plus a conductor count across
+subtraction — the discipline these campaigns actually used.
+
+### Result
+
+```
+  id   class            bug                                        raw      guarded  SILICA
+  B1   connectivity     an added bar bridges two nets              ESCAPED  caught   caught
+  B2   connectivity     a via cut bridges two nets across layers   ESCAPED  caught   caught
+  B3   connectivity     a sub splits one net and deletes another   ESCAPED  ESCAPED  caught
+  L1   label/port       a label lands on no metal                  ESCAPED  caught   caught
+  R1   local rules      an added shape is under minimum width      ESCAPED  caught   caught
+  R2   local rules      a sub thins a wire below minimum width     ESCAPED  ESCAPED  caught
+  R3   local rules      an added shape violates minimum spacing    ESCAPED  caught   caught
+  A1   atomicity        a composite edit half-applies              ESCAPED  ESCAPED  caught
+  S1   artifact schema  stream-out drops an unmapped layer         ESCAPED  ESCAPED  caught
+
+  raw 0/9      guarded 5/9      SILICA 9/9
+```
+
+### Reading it honestly
+
+**A careful wrapper already catches five of the nine.** That is the headline,
+and it is the number to quote. Most of the value in this project is discipline,
+not syntax, and a library could deliver that much without a parser.
+
+The four it misses are the interesting ones, because each needs machinery a
+per-operation guard structurally cannot have:
+
+| | Why a wrapper misses it |
+|---|---|
+| **B3** sub splits one net and deletes another | The guard uses a conductor **count**, the discipline these campaigns really used. Counts cancel: `+1` and `−1` net out to zero and the guard sees nothing. Catching it needs the partition, per net. |
+| **R2** sub thins a wire | Guards are written per operation, and subtraction is the operation people under-guard — it feels like it only removes things. Catching it needs rules re-evaluated over whatever the transaction *left behind*. |
+| **A1** composite edit half-applies | The first edit succeeded and the second failed. Without a transaction there is nothing to roll back to, and the design is left in a state no one authored. |
+| **S1** stream-out drops a layer | The engineer asserts over the layer list they wrote down. The design is the thing that knows what it contains, so the totality obligation has to run from the design, not from the list. |
+
+### What this study does not show
+
+The scenarios were written by the same person who wrote the runtime. This is a
+**demonstration of coverage against a stated taxonomy**, not an unbiased
+estimate of field value, and it cannot be — the author knew every bug in
+advance. Studies 2 and 3 exist because this one cannot settle the question.
+
+---
+
+## Study 2 — campaign replay (pre-registered, not run)
 
 The campaign is fully logged: every script and every DRC results database was
 retained, giving an exact per-round record of (a) the edit attempted, (b) the
@@ -59,7 +117,9 @@ Recording the prediction matters more than its accuracy: if the caught-at-commit
 share is high and rounds-to-clean barely moves, the interesting result is that
 the bottleneck was never the error classes SILICA targets.
 
-## Secondary study: agent-in-the-loop
+---
+
+## Study 3 — agent-in-the-loop (pre-registered, not run)
 
 Give the same LLM agent the same task twice — once with layout-editor Python and
 Tcl, once with only the SILICA interpreter as its edit tool. Count tool calls,
