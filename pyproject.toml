@@ -9,7 +9,7 @@ description = "SILICA: a tool-agnostic programming language that makes agentic p
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Fidel Makatia" }]
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 keywords = ["eda", "chip-design", "layout", "gds", "llm-agents", "dsl", "asic"]
 classifiers = [
     "Development Status :: 3 - Alpha",

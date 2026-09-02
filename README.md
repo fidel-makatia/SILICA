@@ -6,13 +6,18 @@
 
 **S**tructured **I**nvariant **L**anguage for **I**ntegrated **C**ircuit **A**gents
 
-[![tests](https://github.com/fidel-makatia/SILICA/actions/workflows/ci.yml/badge.svg)](https://github.com/fidel-makatia/SILICA/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](pyproject.toml)
+[![python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](pyproject.toml)
 [![no deps](https://img.shields.io/badge/dependencies-zero-brightgreen.svg)](pyproject.toml)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 *The agent proposes; the runtime disposes.*
+
+**Status: alpha.** Single author, no external users yet, no API-stability
+promise. 217 checks pass on Python 3.9–3.14 (`make test`, ~15 s, no
+dependencies). Not yet on PyPI — install from source. The CI workflow is
+committed but is not currently running on this account, so **verify locally**
+rather than trusting a badge.
 
 [Quick start](#-quick-start) •
 [Why](#-why-silica-exists) •

@@ -21,8 +21,8 @@ demo:               ## run the parametric pad-row example
 bench:              ## run the bug-injection benchmark
 	python3 eval/benchmark.py
 
-validate:           ## validate against every routed design ORFS has built
-	python3 eval/validate_designs.py
+validate:           ## validate against routed designs (EXCLUDE=pat,pat to skip)
+	python3 eval/validate_designs.py $(if $(EXCLUDE),--exclude=$(EXCLUDE))
 
 clean:              ## remove caches and flow traces
 	find . -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true

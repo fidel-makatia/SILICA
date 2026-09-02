@@ -14,7 +14,12 @@ make demo                     # run examples/padframe_gen.sil
 ```
 
 No dependencies beyond the standard library. KLayout is optional and only
-needed for the second backend; its suite skips cleanly without it. Python ≥ 3.8.
+needed for the second backend; its suite skips cleanly without it.
+
+Python ≥ 3.9, and that bound is tested rather than assumed: the suite is run on
+3.9 through 3.14 before release. The CI workflow in `.github/workflows/` is
+committed but is not currently running on this account, so run `make test`
+locally and do not trust a badge.
 
 ## No process data, ever
 
@@ -28,6 +33,14 @@ generic names like `chip` or `top`. Do not paste real coordinates, cell names,
 deck names, site paths, machine names, job ids, or numbers taken from a rule
 deck, and do not describe a failure in a way that identifies the process, the
 design or the customer.
+
+`eval/validate_designs.py` walks an OpenROAD results tree and reads whatever it
+finds. If yours also holds proprietary designs, exclude them by name — it is
+applied before the layout is opened, so an excluded design is never read:
+
+```bash
+python3 eval/validate_designs.py --exclude=myblock,customer_
+```
 
 Failure *classes* are welcome and are the whole point of `spec/invariants.md` —
 "a synthesis tool took time units from the first-read library" is a story about

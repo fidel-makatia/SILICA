@@ -13,6 +13,15 @@ and compares two things against KLayout on identical geometry:
 Agreement on the VERDICT is the contract. Run:
 
     python3 eval/validate_designs.py [ORFS_FLOW_DIR]
+        [--max-gb=N] [--exclude=pat,pat] [--timeout=SECONDS]
+
+This walks a results tree and reads whatever it finds there, so if that tree
+also holds proprietary or NDA-covered designs, exclude them:
+
+    python3 eval/validate_designs.py --exclude=myblock,customer_
+
+`--exclude` matches a substring of "platform/design" and is applied before the
+layout is opened, so an excluded design is never read at all.
 """
 import json
 import os
@@ -211,7 +220,8 @@ def run_isolated(flow, platform, design, timeout):
     key = "%s/%s" % (platform, design)
     try:
         p = subprocess.run(
-            [sys.executable, os.path.abspath(__file__), flow, "--only=" + key],
+            [sys.executable, os.path.abspath(__file__), flow,
+             "--only=" + key],
             capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return {"platform": platform, "design": design, "verdict": "TIMEOUT",
@@ -230,7 +240,8 @@ def run_isolated(flow, platform, design, timeout):
                                      if p.stderr else "killed, no output")}
 
 
-def main(flow, max_gb=DEFAULT_MAX_GB, only=None, timeout=1800):
+def main(flow, max_gb=DEFAULT_MAX_GB, only=None, timeout=1800,
+         exclude=()):
     plats = os.path.join(flow, "platforms")
     results = os.path.join(flow, "results")
     rows = []
@@ -262,6 +273,18 @@ def main(flow, max_gb=DEFAULT_MAX_GB, only=None, timeout=1800):
             gds = os.path.join(base, "6_final.gds")
             if not os.path.exists(gds):
                 continue
+            key = "%s/%s" % (platform, design)
+            hit = [e for e in exclude if e and e in key]
+            if hit:
+                # excluded before the file is opened, not after
+                print("  %-11s %-18s  EXCLUDED (--exclude=%s)"
+                      % (platform, design[:18], hit[0]), flush=True)
+                rows.append({"platform": platform, "design": design,
+                             "shapes": None, "silica_nets": None,
+                             "klayout_nets": None, "verdict": "EXCLUDED",
+                             "width_agree": False, "def_nets": None,
+                             "note": "matched --exclude=%s" % hit[0]})
+                continue
             gb = os.path.getsize(gds) / 1e9
             if gb > max_gb:
                 print("  %-11s %-16s  SKIPPED (%.1f GB > --max-gb %.1f)"
@@ -290,12 +313,14 @@ def main(flow, max_gb=DEFAULT_MAX_GB, only=None, timeout=1800):
     ok = sum(1 for r in done if r["verdict"] == "AGREE")
     print("%d designs checked, %d agree on nets, %d agree on width"
           % (len(done), ok, sum(1 for r in done if r["width_agree"])))
-    for v in ("SKIPPED", "NO-STACK", "CRASHED", "TIMEOUT", "ERROR"):
+    for v in ("SKIPPED", "EXCLUDED", "NO-STACK", "CRASHED", "TIMEOUT",
+              "ERROR"):
         n = sum(1 for r in rows if r["verdict"] == v)
         if n:
             print("%d design(s) %s -- not checked, not counted as passing"
                   % (n, v.lower()))
-    skip = ("AGREE", "SKIPPED", "NO-STACK", "CRASHED", "TIMEOUT", "ERROR")
+    skip = ("AGREE", "SKIPPED", "EXCLUDED", "NO-STACK", "CRASHED",
+            "TIMEOUT", "ERROR")
     bad = [r for r in rows if r["verdict"] not in skip]
     for r in bad:
         print("  NOT AGREED: %s/%s  %s" % (r["platform"], r["design"],
@@ -373,7 +398,7 @@ def one(platform, design, gds, defp, metals, vias):
 
 if __name__ == "__main__":
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    mg, only, tmo = DEFAULT_MAX_GB, None, 1800
+    mg, only, tmo, exc = DEFAULT_MAX_GB, None, 1800, []
     for a in sys.argv[1:]:
         if a.startswith("--max-gb="):
             mg = float(a.split("=", 1)[1])
@@ -381,6 +406,8 @@ if __name__ == "__main__":
             only = a.split("=", 1)[1]
         elif a.startswith("--timeout="):
             tmo = int(a.split("=", 1)[1])
+        elif a.startswith("--exclude="):
+            exc = [x.strip() for x in a.split("=", 1)[1].split(",")]
     flow = args[0] if args else \
         os.path.expanduser("~/OpenROAD-flow-scripts/flow")
-    main(flow, mg, only, tmo)
+    main(flow, mg, only, tmo, exc)
