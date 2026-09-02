@@ -31,6 +31,8 @@ jobs:
         run: python tests/test_export.py
       - name: Layout import round trip
         run: python tests/test_import.py
+      - name: Exact width vs KLayout DRC
+        run: python tests/test_width.py
       - name: Flow layer
         run: python tests/test_flow.py
       - name: Bug-injection benchmark (pins the published numbers)

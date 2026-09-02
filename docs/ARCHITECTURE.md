@@ -338,18 +338,25 @@ they were cut. Validated against real routed designs on sky130: OpenROAD's
 **18,396 nets**). At AES scale extraction takes 10.2 s in 0.8 GB, and a
 transaction's shadow copy of the whole design takes 0.45 s.
 
-**Width is not.** SILICA measures width per stored rectangle. When you author
-geometry you choose that decomposition; when you import it, the source tool
-chose it, and a band sliced across a wider shape reads as a narrow wire. On the
-same routed design a declared `met1.width >= 140` rule fires on geometry
-KLayout's own `width_check` says is clean — a false rollback, not a missed
-violation, but wrong either way.
+**Width is too, now.** It did not used to be. Width was measured per stored
+rectangle, which is wrong the moment a rectangle is a *slice across* a wider
+shape — precisely what an imported layout looks like, since the source tool
+chose the decomposition. On the routed `gcd` a declared `met1.width >= 140`
+rule fired on geometry KLayout's own width check calls clean.
 
-So a program working on imported layout should rely on `connectivity` and
-declare no `rules` block, which is what `examples/sky130_eco.sil` does.
-`tests/test_import.py` pins the failing case so it cannot quietly change, and
-the fix is to give `width_violation` an exact rectilinear implementation rather
-than a per-rectangle one.
+Width is now measured over the **union**: sweep the distinct x coordinates, and
+between two consecutive ones the covering set is constant, so the material
+there is a set of y intervals and any interval shorter than the limit is a real
+thickness violation. Repeat over y. The decomposition cannot change the answer.
+
+**The metric is part of the definition.** SILICA measures width between
+opposing edges that face each other in *projection*. KLayout defaults to the
+*Euclidian* metric, which additionally measures diagonally across a re-entrant
+corner — a staircase of 200-wide arms reports a 141 violation against a 200
+limit. That is a different rule, not a disagreement, so the KLayout adapter is
+pinned to the projection metric and cannot drift. `tests/test_width.py` fuzzes
+the two against each other over 3,000 randomized layouts; they agree on every
+verdict.
 
 ## 7. Why every rule exists: the failure-class map
 
@@ -403,11 +410,11 @@ SILICA/
 
 | Layer | Status |
 |---|---|
-| Transform layer (language + tx + connectivity + width/space) | **implemented; 206 checks green on all three engines** |
+| Transform layer (language + tx + connectivity + width/space) | **implemented; 218 checks green on all three engines** |
 | Backend protocol + pure-Python + KLayout backends | **implemented; shared conformance corpus** |
 | Strict name resolution (no silent no-op checks) | **implemented** |
 | Conditional rules (`m3.space(wide>W) >= S`) | in the grammar; **refused** until checked |
-| Layout import (`import`) | **implemented**; connectivity exact, width not (§6.1) |
+| Layout import (`import`) | **implemented**; connectivity and width both exact (§6.1) |
 | Artifact totality (`export`) | **implemented**: refuses to write a design its map does not cover |
 | `ports` / `density` invariants | specified; **refused** until checked |
 | Goal layer (tactics, budgets, traces) | specified |

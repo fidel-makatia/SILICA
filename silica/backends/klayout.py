@@ -6,11 +6,11 @@ Region engine. The interpreter never knows which backend it is driving.
 
 Documented approximations (deterministic, and covered by the shared
 conformance corpus in `tests/conformance.py`):
-  * `width_violation` is exact: it is KLayout's own `width_check`. It can
-    report a different MEASUREMENT from the reference engine on a
-    non-rectangular shape (the reference reports the narrowest box of the
-    coalesced decomposition, KLayout the narrowest edge-pair distance) while
-    reaching the same VERDICT. The conformance corpus checks verdicts.
+  * `width_violation` is KLayout's own `width_check` under the projection
+    metric, matching the reference engine's definition (SPEC section 5). The
+    default Euclidian metric would not: it measures corner-to-corner across
+    re-entrant corners, so a staircase of legal-width arms reports a
+    violation.
   * `spacing_violation` compares merged-polygon bounding boxes, per net pair.
     That is exact for rectangular nets; for an L-shaped net the bounding box
     is larger than the net, so the gap is under-reported and the check errs
@@ -232,8 +232,17 @@ class KLayoutBackend:
 
     # -- protocol: measurements --
     def width_violation(self, layer, win, limit):
-        """Exact: KLayout's own width check over the merged layer."""
-        ep = self._region(layer).merged().width_check(limit)
+        """KLayout's own width check, under the PROJECTION metric.
+
+        The metric matters and is not a detail. KLayout defaults to Euclidian,
+        which also measures corner-to-corner across a re-entrant corner -- a
+        staircase of 200-wide arms reports a 141 violation against a 200 limit.
+        SILICA defines width by opposing edges that face each other in
+        projection, so the adapter must ask for the same thing or the two
+        backends would disagree on real geometry.
+        """
+        ep = self._region(layer).merged().width_check(
+            limit, False, pya.Metrics.Projection)
         worst = None
         for pair in ep.each():
             if not _overlaps(pair.bbox(), win):

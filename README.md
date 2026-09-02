@@ -65,7 +65,7 @@ cd SILICA
 pip install -e .            # zero dependencies; add ".[klayout]" for the KLayout backend
 
 silica examples/fix_notch.sil        # run a program
-make test                            # 206 checks across 11 suites, ~10 seconds
+make test                            # 218 checks across 12 suites, ~10 seconds
 ```
 
 ## 🧨 Why SILICA exists
@@ -225,11 +225,12 @@ ROLLBACK shorting_patch {"rule": "bridge",
   "nets": ["met1@140830,1740", "met1@161530,1400"]}
 ```
 
-**A limitation this found:** a declared `width` rule fires on imported geometry
-that KLayout's own width check says is clean, because SILICA measures width per
-stored rectangle and import chooses the decomposition. Connectivity is
-unaffected. Documented in `docs/ARCHITECTURE.md` §6.1, pinned by
-`tests/test_import.py`, and on the roadmap above.
+**A bug this found, since fixed:** a declared `width` rule fired on imported
+geometry that KLayout calls clean, because width was measured per stored
+rectangle and import chooses the decomposition. Width is now measured over the
+union of the geometry, so the decomposition cannot change the answer — verified
+against KLayout on 3,000 randomized layouts and on AES's 246,049 met1
+rectangles. See `docs/ARCHITECTURE.md` §6.1.
 
 ## 📊 Does it actually help? (`eval/benchmark.py`)
 
@@ -322,7 +323,7 @@ silica/                 the language implementation
 spec/                   language definition · grammar · invariant/field-bug map
 docs/ARCHITECTURE.md    system design & where the LLM sits (and doesn't)
 examples/               runnable programs, incl. replays of real fix classes
-tests/                  11 suites / 206 checks; conformance.py is the backend contract
+tests/                  12 suites / 218 checks; conformance.py is the backend contract
 eval/                   pre-registered evaluation plan vs. a logged campaign
 ```
 
@@ -340,7 +341,7 @@ eval/                   pre-registered evaluation plan vs. a logged campaign
 - [ ] evaluation budget (step limit) so an agent's runaway loop is a rollback
 - [ ] sandboxed flow steps (undeclared-input detection)
 - [x] `import`: read an OpenROAD/KLayout layout in and edit it
-- [ ] exact rectilinear width, so rules work on imported geometry
+- [x] exact rectilinear width, so rules hold on imported geometry
 - [ ] OpenROAD / Innovus / OpenAccess backends
 - [ ] the eval: replay a logged padframe campaign, publish rounds-to-clean
 

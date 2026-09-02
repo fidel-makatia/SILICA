@@ -111,16 +111,14 @@ check("exporting an imported design is refused",
       p.returncode == 1 and "partial-design" in p.stdout, p.stdout + p.stderr)
 check("...and nothing is written", not os.path.exists(OUT))
 
-# ---- KNOWN LIMITATION: width does not survive decomposition -------------
+# ---- width survives decomposition (this used to be a known limitation) ---
 # A horizontal arm meeting a vertical arm that overhangs it. Every part of the
 # shape is at least 200 wide and KLayout's own width check agrees: zero
-# violations. Merged and decomposed into horizontal bands, though, the overhang
-# below the arm becomes a 200 x 60 band -- and SILICA, measuring per stored
-# rectangle, calls that a 60-wide shape.
-#
-# Connectivity is unaffected. The width rule is not trustworthy on imported
-# geometry until this is fixed, which is why examples/sky130_eco.sil declares
-# no rules block.
+# violations. Merged and decomposed into horizontal bands, the overhang below
+# the arm becomes a 200 x 60 band -- and SILICA used to measure per stored
+# rectangle and call that a 60-wide shape, which is a false violation on clean
+# routed layout. Width is now measured over the union, so the decomposition no
+# longer changes the answer.
 L = os.path.join(tmp, "l.gds")
 LSRC = HDR + '''tx t {
   add m1 box(0,60,1000,260) on new_net
@@ -146,10 +144,14 @@ check("KLayout says this shape has no real width violation at 200",
 check("authored geometry agrees: no violation",
       authored.width_violation("m1", win, 200) is None,
       authored.width_violation("m1", win, 200))
-check("KNOWN LIMITATION: the same shape imported reports a false violation",
-      lback.width_violation("m1", win, 200) is not None,
-      "if this now passes, the decomposition issue is fixed -- update "
-      "docs/ARCHITECTURE.md and examples/sky130_eco.sil")
+check("the same shape imported reports no violation either",
+      lback.width_violation("m1", win, 200) is None,
+      lback.width_violation("m1", win, 200))
+check("imported and authored geometry give the same width answer",
+      lback.width_violation("m1", win, 300)
+      == authored.width_violation("m1", win, 300),
+      (lback.width_violation("m1", win, 300),
+       authored.width_violation("m1", win, 300)))
 check("connectivity is unaffected by the decomposition",
       lback.net_count() == authored.net_count() == 1,
       (lback.net_count(), authored.net_count()))

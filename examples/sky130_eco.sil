@@ -29,11 +29,10 @@ stack {
 
 invariants { connectivity }
 
-// NOTE: no `rules` block. Import decomposes merged polygons into rectangles,
-// and SILICA measures width per rectangle, so a slice through a wider shape
-// reads as a narrow wire and a width rule fires on clean geometry.
-// Connectivity is exact regardless of decomposition; width is not.
-// See docs/ARCHITECTURE.md, "Working on imported layout".
+// Width is measured over the union of the geometry, not per stored rectangle,
+// so a rule holds on imported layout even though the decomposition was chosen
+// by whatever tool wrote the file. sky130 met1 minimum width is 140 nm.
+rules { met1.width >= 140 }
 
 import "6_final.gds" top gcd {
   met1 -> (68,20)   met2 -> (69,20)   met3 -> (70,20)

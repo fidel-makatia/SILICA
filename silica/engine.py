@@ -15,7 +15,7 @@ Two pure-Python engines live here:
 `tests/test_engine.py` fuzzes the two against each other. If they ever
 disagree, the simple one is right.
 """
-from silica.geometry import Box, UF, union_rect
+from silica.geometry import Box, UF, union_rect, width_violation_rects
 
 _CELL = 1 << 12      # spatial-hash cell, in DBU
 _MAX_CELLS = 256     # a shape spanning more cells than this goes in `big`
@@ -206,13 +206,8 @@ class SimpleDesign:
         return worst
 
     def width_violation(self, layer, win, limit):
-        worst = None
-        for b in self.shapes.get(layer, []):
-            if b.touches(win):
-                w = b.width()
-                if w < limit and (worst is None or w < worst):
-                    worst = w
-        return worst
+        rects = [b for b in self.shapes.get(layer, []) if b.touches(win)]
+        return width_violation_rects(rects, win, limit)
 
 
 # ---------------------------------------------------------------------------
@@ -577,14 +572,9 @@ class Design:
     # -- measurements --
     def width_violation(self, layer, win, limit):
         shp = self._shapes.get(layer, {})
-        worst = None
-        for s in self._near(layer, win):
-            b = shp.get(s)
-            if b is not None and b.touches(win):
-                w = b.width()
-                if w < limit and (worst is None or w < worst):
-                    worst = w
-        return worst
+        rects = [shp[s] for s in self._near(layer, win)
+                 if s in shp and shp[s].touches(win)]
+        return width_violation_rects(rects, win, limit)
 
     def spacing_violation(self, layer, win, limit):
         uf = self._ensure()
