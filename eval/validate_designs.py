@@ -333,8 +333,26 @@ def one(platform, design, gds, defp, metals, vias):
         rec["silica_seconds"] = round(time.time() - t0, 1)
         kn, ly, cell = klayout_nets(gds, top, metals, vias)
         rec["klayout_nets"] = kn
-        rec["verdict"] = ("AGREE" if kn == rec["silica_nets"]
-                          else "DISAGREE")
+        # The two models differ on one point, by design: KLayout treats every
+        # declared conductive layer as net-forming, so a via cut touching no
+        # metal is a net of its own. SILICA treats cuts as mediators only --
+        # they join metals and are never net members -- so an isolated cut
+        # belongs to no net. Reconcile explicitly rather than call it a
+        # disagreement, and say how many were involved.
+        orphans = 0
+        d._ensure()
+        for (vn, _l, _dt, a, b) in vias:
+            for _s, vb in d._shapes.get(vn, {}).items():
+                if not d._touching(a, vb) and not d._touching(b, vb):
+                    orphans += 1
+        rec["isolated_via_cuts"] = orphans
+        if kn == rec["silica_nets"]:
+            rec["verdict"] = "AGREE"
+        elif kn == rec["silica_nets"] + orphans:
+            rec["verdict"] = "AGREE"
+            rec["note"] = "+%d isolated via cut(s)" % orphans
+        else:
+            rec["verdict"] = "DISAGREE"
         # width, on the busiest metal layer, at a limit that finds both answers
         busiest = max(metals, key=lambda m: len(boxes[m[0]]))
         widths = sorted({b.width() for b in boxes[busiest[0]]})

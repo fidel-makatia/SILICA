@@ -243,7 +243,7 @@ own process, so one that is OOM-killed becomes a recorded row rather than a
 truncated table that looks complete.
 
 ```
-36 designs checked   35 agree on nets   36 agree on width
+36 designs checked   36 agree on nets   36 agree on width
 31,051,274 shapes
 ```
 
@@ -262,15 +262,23 @@ Six PDKs — **sky130hd, sky130hs, nangate45, asap7, gf180, ihp-sg13g2** — fro
 | ihp-sg13g2 | aes | 1,219,572 | 36,962 | 36,962 | agree |
 | sky130hd | aes | 1,119,207 | 35,994 | 35,994 | agree |
 
-**One design disagrees, and it stays in the table.** On `nangate45/tinyRocket`
-(1,079,521 shapes) SILICA finds 88,494 nets and KLayout 88,496 — SILICA merges
-two pairs KLayout keeps apart, 2 in 88,496. It is not a stack-derivation
-artifact (the derived nangate45 stack is ten metals and nine vias with no
-duplicate GDS layers) and it is not corner-touching (both engines join
-corner-touching boxes). It is unresolved, it is the dangerous direction —
-over-connecting means a real short could read as one net — and it is on the
-roadmap. Reporting 35/36 is the point; a harness that quietly dropped the
-awkward one would be the failure this project exists to remove.
+**One design initially disagreed, and chasing it was worth more than the other
+35 passing.** `nangate45/tinyRocket` (1,079,521 shapes) gave SILICA 88,494 nets
+against KLayout's 88,496. Bisecting the die localized it to a 23 µm window
+holding one `via9` cut with no metal9 or metal10 anywhere near it, and a
+design-wide count found exactly two such cuts:
+
+```
+SILICA 88,494  +  2 isolated via cuts  =  88,496 = KLayout
+```
+
+It is a **modelling difference, not a bug**. KLayout treats every declared
+conductive layer as net-forming, so a via cut touching nothing is a net of its
+own. SILICA treats cuts as *mediators only* — they join metals and are never
+net members — so an isolated cut belongs to no net. SILICA's reading is the
+more physical one, and the harness now reconciles the two explicitly and
+reports how many cuts were involved, rather than flagging a false
+disagreement.
 
 Also not counted as passing: one design skipped on size (3.6 GB, over
 `--max-gb`).
@@ -385,7 +393,6 @@ eval/                   pre-registered evaluation plan vs. a logged campaign
 - [ ] sandboxed flow steps (undeclared-input detection)
 - [x] `import`: read an OpenROAD/KLayout layout in and edit it
 - [x] exact rectilinear width, so rules hold on imported geometry
-- [ ] resolve nangate45/tinyRocket: SILICA merges 2 nets KLayout separates
 - [ ] OpenROAD / Innovus / OpenAccess backends
 - [ ] the eval: replay a logged padframe campaign, publish rounds-to-clean
 

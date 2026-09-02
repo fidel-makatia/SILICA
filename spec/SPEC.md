@@ -83,6 +83,12 @@ rules {
 invariants { connectivity }     // checked at every tx commit
 ```
 
+Via cuts are **mediators, not conductors**: a cut joins the metals it touches
+and is never itself a member of a net, so a cut touching no metal belongs to no
+net. Extractors that treat every conductive layer as net-forming count such a
+cut as a net of its own; the difference is one of modelling, and
+`eval/validate_designs.py` reconciles it explicitly when comparing against one.
+
 `stack` is the single source of connectivity truth: the `connectivity`
 invariant, net probes and the LVS exporter all derive from it. There is no way
 to give the extractor and the editor different models.
