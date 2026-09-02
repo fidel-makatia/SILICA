@@ -8,7 +8,7 @@ Thanks for your interest. SILICA is young and contributions land fast.
 git clone https://github.com/fidel-makatia/SILICA.git
 cd SILICA
 pip install -e ".[klayout]"   # the klayout extra enables the second backend
-make test                     # 218 checks across 12 suites, ~10 seconds
+make test                     # 217 checks across 12 suites, ~10 seconds
 make lint                     # flake8, if you have it
 make demo                     # run examples/padframe_gen.sil
 ```
