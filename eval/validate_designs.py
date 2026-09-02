@@ -17,6 +17,7 @@ Agreement on the VERDICT is the contract. Run:
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 
@@ -199,7 +200,37 @@ def def_nets(defpath):
 DEFAULT_MAX_GB = 0.5
 
 
-def main(flow, max_gb=DEFAULT_MAX_GB):
+def run_isolated(flow, platform, design, timeout):
+    """Check one design in a child process.
+
+    A design large enough to be OOM-killed takes the whole run with it, and a
+    SIGKILL leaves no traceback -- the harness just stops, with a partial table
+    that looks complete. One process per design turns that into a recorded
+    CRASHED row instead of silence.
+    """
+    key = "%s/%s" % (platform, design)
+    try:
+        p = subprocess.run(
+            [sys.executable, os.path.abspath(__file__), flow, "--only=" + key],
+            capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"platform": platform, "design": design, "verdict": "TIMEOUT",
+                "shapes": None, "silica_nets": None, "klayout_nets": None,
+                "width_agree": False, "def_nets": None,
+                "note": "exceeded %ds" % timeout}
+    for line in p.stdout.splitlines():
+        if line.startswith("{"):
+            return json.loads(line)
+    return {"platform": platform, "design": design, "verdict": "CRASHED",
+            "shapes": None, "silica_nets": None, "klayout_nets": None,
+            "width_agree": False, "def_nets": None,
+            "note": "exit %d: %s" % (p.returncode,
+                                     (p.stderr or "no output").strip()
+                                     .splitlines()[-1][:120]
+                                     if p.stderr else "killed, no output")}
+
+
+def main(flow, max_gb=DEFAULT_MAX_GB, only=None, timeout=1800):
     plats = os.path.join(flow, "platforms")
     results = os.path.join(flow, "results")
     rows = []
@@ -241,31 +272,39 @@ def main(flow, max_gb=DEFAULT_MAX_GB):
                              "width_agree": False, "def_nets": None,
                              "note": "%.1f GB" % gb})
                 continue
-            rows.append(one(platform, design, gds,
-                            os.path.join(base, "6_final.def"), metals, vias))
+            if only and only != "%s/%s" % (platform, design):
+                continue
+            if only:
+                print(json.dumps(one(platform, design, gds,
+                                     os.path.join(base, "6_final.def"),
+                                     metals, vias)))
+                return []
+            rows.append(run_isolated(flow, platform, design, timeout))
             r = rows[-1]
-            print("  %-11s %-16s %8s shapes  silica %7s  klayout %7s  %s"
-                  % (r["platform"], r["design"], r["shapes"], r["silica_nets"],
-                     r["klayout_nets"], r["verdict"]), flush=True)
+            print("  %-11s %-18s %9s shapes  silica %7s  klayout %7s  %s%s"
+                  % (r["platform"], r["design"][:18], r["shapes"],
+                     r["silica_nets"], r["klayout_nets"], r["verdict"],
+                     ("  " + r["note"]) if r.get("note") else ""), flush=True)
     print()
     done = [r for r in rows if r["verdict"] in ("AGREE", "DISAGREE")]
     ok = sum(1 for r in done if r["verdict"] == "AGREE")
     print("%d designs checked, %d agree on nets, %d agree on width"
           % (len(done), ok, sum(1 for r in done if r["width_agree"])))
-    for v in ("SKIPPED", "NO-STACK"):
+    for v in ("SKIPPED", "NO-STACK", "CRASHED", "TIMEOUT", "ERROR"):
         n = sum(1 for r in rows if r["verdict"] == v)
         if n:
             print("%d design(s) %s -- not checked, not counted as passing"
                   % (n, v.lower()))
-    skip = ("AGREE", "SKIPPED", "NO-STACK")
+    skip = ("AGREE", "SKIPPED", "NO-STACK", "CRASHED", "TIMEOUT", "ERROR")
     bad = [r for r in rows if r["verdict"] not in skip]
     for r in bad:
         print("  NOT AGREED: %s/%s  %s" % (r["platform"], r["design"],
                                            r["verdict"] or r["note"]))
     print("total shapes checked: %d"
           % sum(r["shapes"] or 0 for r in done))
-    with open("silica_validation.json", "w") as f:
-        json.dump(rows, f, indent=1)
+    if not only:
+        with open("silica_validation.json", "w") as f:
+            json.dump(rows, f, indent=1)
     return rows
 
 
@@ -316,10 +355,14 @@ def one(platform, design, gds, defp, metals, vias):
 
 if __name__ == "__main__":
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    mg = DEFAULT_MAX_GB
+    mg, only, tmo = DEFAULT_MAX_GB, None, 1800
     for a in sys.argv[1:]:
         if a.startswith("--max-gb="):
             mg = float(a.split("=", 1)[1])
+        elif a.startswith("--only="):
+            only = a.split("=", 1)[1]
+        elif a.startswith("--timeout="):
+            tmo = int(a.split("=", 1)[1])
     flow = args[0] if args else \
         os.path.expanduser("~/OpenROAD-flow-scripts/flow")
-    main(flow, mg)
+    main(flow, mg, only, tmo)
