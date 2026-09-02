@@ -5,3 +5,4 @@ build/
 dist/
 .venv/
 silica_flow_trace.jsonl
+*.gds

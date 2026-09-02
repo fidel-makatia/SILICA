@@ -105,7 +105,7 @@ windows intersecting the transaction's touched region.
   failing signoff round, as were the layers on which fill was forbidden.
   Declared once, they would be checked at edit time instead.
 
-## 5. `schema(artifact)` — specified, not implemented
+## 5. `schema(artifact)` — implemented, as the `export` obligation
 
 **Statement.** An exporter (GDS stream-out, CDL, LEF) must have a mapping rule
 for every datum it encounters. Unmapped data aborts the export; there is no
@@ -123,10 +123,15 @@ for every datum it encounters. Unmapped data aborts the export; there is no
   cell name. SILICA has one design database; merged-in macros are opaque
   instances with collision-checked names.
 
-Until the exporter exists, the **flow layer** enforces the same property from
-outside the tool: `assert_map_total(mapfile, names)` refuses to proceed unless
-every named layer — and every `layer.kind` pair, such as the text rows above —
-has a stream-map row. `tests/test_flow.py` covers both.
+The `export` statement enforces this for designs SILICA writes itself: it
+proves its map covers every layer holding geometry and every layer carrying
+labels *before* writing a byte, names what it would otherwise have dropped, and
+leaves no file behind on failure (`tests/test_export.py`).
+
+For artifacts written by somebody else's tool, the **flow layer** enforces the
+same property from outside: `assert_map_total(mapfile, names)` refuses to
+proceed unless every named layer — and every `layer.kind` pair, such as the
+text rows above — has a stream-map row (`tests/test_flow.py`).
 
 ## 6. Constructor and type errors — implemented
 

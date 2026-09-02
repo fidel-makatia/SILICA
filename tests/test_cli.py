@@ -103,7 +103,7 @@ check("--help exits 0", rc == 0 and "usage:" in out, out)
 # ---- flow halts ----------------------------------------------------------
 rc, out, _ = run(["--flow", prog('step("x", "true", ["nope.txt"], [])\n')])
 check("a flow halt exits 1 with a structured payload",
-      rc == 1 and "FLOW-HALT" in out and "missing-input" in out, out)
+      rc == 1 and "HALT" in out and "missing-input" in out, out)
 
 print("----")
 print("ALL PASS" if fails == 0 else "%d FAILURES" % fails)

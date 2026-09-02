@@ -200,6 +200,9 @@ Given (1), the commit-time net-count check is *redundant* — which is precisely
 why SILICA still runs it. It is the cross-check that catches a backend whose
 partition disagrees with the effects the interpreter believes it applied.
 
+**Artifact totality** is implemented, as the obligation of the `export`
+statement rather than as a per-tx invariant (§7.1).
+
 Also implemented, and always on when declared in `rules`:
 
 - `width` / `space` minima, evaluated on the final shadow in the halo of every
@@ -213,8 +216,6 @@ than a no-op, and it will become legal only when it is checked:
   names bind the same net unless declared `alias(a,b)`; every port's label sits
   on metal of that net.
 - `density(windowed)` — declared per-layer window/threshold density checks.
-- `schema(artifact)` — exporters are total: any datum without a mapping rule
-  aborts the export.
 - conditional rules — `m3.space(wide>W, prl>P) >= S`, the wide-metal spacing
   tiers.
 
@@ -250,6 +251,26 @@ a file the step reads but does not declare will not invalidate it.
 
 Two pre-tool gates ship with the layer: `assert_lib_units(libs)` and
 `assert_map_total(mapfile, names)` (§ `spec/invariants.md`).
+
+### 7.1 Export: artifact schemas are total
+
+```
+export "chip.gds" {
+  m6      -> (36,0)
+  m6.NAME -> (236,0)
+}
+```
+
+`export` writes the design as GDSII. Before it writes anything it proves its
+map is **total** over the design: every layer holding geometry needs a rule,
+and every layer carrying labels needs a `layer.NAME` rule. A design holding a
+datum the map does not cover fails the export, names what it would have had to
+drop, and writes no file. There is no skip path in the writer itself either.
+
+This is the property that a stream map missing its via rows violates — the
+cut geometry is simply absent from the output, and the first thing that notices
+is LVS, reporting opens. A rule matching no geometry is reported and is not an
+error; the obligation is one-directional.
 
 ## 8. Error model
 

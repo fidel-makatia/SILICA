@@ -376,7 +376,8 @@ SILICA/
 | Backend protocol + pure-Python + KLayout backends | **implemented; shared conformance corpus** |
 | Strict name resolution (no silent no-op checks) | **implemented** |
 | Conditional rules (`m3.space(wide>W) >= S`) | in the grammar; **refused** until checked |
-| `ports` / `density` / `schema` invariants | specified; **refused** until checked |
+| Artifact totality (`export`) | **implemented**: refuses to write a design its map does not cover |
+| `ports` / `density` invariants | specified; **refused** until checked |
 | Goal layer (tactics, budgets, traces) | specified |
 | Flow layer (declared steps, hashing, caching, gates) | **implemented subset** |
 | Sandboxed flow steps (undeclared-input detection) | specified |

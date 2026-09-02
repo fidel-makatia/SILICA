@@ -269,7 +269,8 @@ eval/                   pre-registered evaluation plan vs. a logged campaign
 - [x] shared conformance corpus both backends must pass
 - [x] strict name resolution: no declared check can silently do nothing
 - [ ] conditional DRC rules checked at commit (wide-metal spacing tiers)
-- [ ] `ports` / `density` / `schema` invariants
+- [x] artifact totality: `export` refuses to drop unmapped data
+- [ ] `ports` / `density` invariants
 - [ ] goal layer: bounded tactics, budgets, replayable traces
 - [ ] evaluation budget (step limit) so an agent's runaway loop is a rollback
 - [ ] sandboxed flow steps (undeclared-input detection)

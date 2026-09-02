@@ -74,9 +74,9 @@ def main(argv=None):
               "ERROR %s" % json.dumps(dict(e.data, file=files[0])))
         return 2
     except Counterexample as ce:
-        # a flow-layer failure outside any tx: structured halt
+        # a gate, step or export failure outside any tx: structured halt
         _emit(dict(ce.data, halt="flow"), as_json,
-              "FLOW-HALT " + json.dumps(ce.data))
+              "HALT " + json.dumps(ce.data))
         return 1
 
     for name, ok, ce in results:

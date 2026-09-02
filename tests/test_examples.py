@@ -41,7 +41,8 @@ EXPECT = {
                           "COMMIT   fix_notch"]),
     "bridge_caught.sil": (0, ["COMMIT   seed",
                               "ROLLBACK bad_bridge"]),
-    "padframe_gen.sil": (0, ["placed 8 pads", "COMMIT   place_pads"]),
+    "padframe_gen.sil": (0, ["placed 8 pads", "COMMIT   place_pads",
+                             "padring.gds: 16 element(s)"]),
 }
 
 for name, (want_rc, want_lines) in EXPECT.items():
@@ -49,6 +50,27 @@ for name, (want_rc, want_lines) in EXPECT.items():
     ok = rc == want_rc and all(w in out for w in want_lines)
     check("example %s behaves as documented" % name, ok,
           "rc=%s out=%r err=%r" % (rc, out, err))
+
+# the pad row streams out a GDS a real tool can read
+gds = os.path.join(ROOT, "padring.gds")
+check("padframe_gen writes a GDS", os.path.exists(gds))
+if os.path.exists(gds):
+    from silica.gds import read_gds
+    top, els = read_gds(gds)
+    check("the streamed pad row has 8 pads and 8 labels",
+          top == "padring"
+          and len([e for e in els if e[0] == "boundary"]) == 8
+          and len([e for e in els if e[0] == "text"]) == 8, (top, len(els)))
+    try:
+        import klayout.db as pya
+        ly = pya.Layout()
+        ly.read(gds)
+        check("KLayout reads the streamed pad row",
+              ly.top_cell().name == "padring"
+              and pya.Region(ly.top_cell().begin_shapes_rec(
+                  ly.layer(36, 0))).area() == 8 * 50000 * 60000)
+    except ImportError:
+        print("SKIP klayout read of padring.gds")
 
 # the bridge counterexample must name both nets it would have shorted
 rc, out, _ = silica(["examples/bridge_caught.sil"])
@@ -59,7 +81,7 @@ check("bridge_caught reports both net ids",
 # launching anything
 rc, out, _ = silica(["--flow", "examples/asic_flow.sil"])
 check("asic_flow halts on a missing declared input",
-      rc == 1 and "FLOW-HALT" in out and "missing-lib" in out, out)
+      rc == 1 and "HALT" in out and "missing-lib" in out, out)
 
 # ---- the pin-label injector ----------------------------------------------
 

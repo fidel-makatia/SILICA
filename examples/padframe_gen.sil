@@ -40,3 +40,11 @@ tx place_pads {
 }
 
 print("placed " + str(n) + " pads at pitch " + str(pitch) + " nm")
+
+// Stream it out. The map must cover every layer the design actually holds,
+// including the text rows for the labels -- an export that has no rule for
+// something in the database fails rather than quietly dropping it.
+export "padring.gds" {
+  m6      -> (36,0)
+  m6.NAME -> (236,0)
+}

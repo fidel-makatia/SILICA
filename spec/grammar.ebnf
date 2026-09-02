@@ -7,7 +7,7 @@
 
 program     = { stmt } ;
 
-stmt        = design_decl | stack_decl | rules_decl | inv_decl
+stmt        = design_decl | stack_decl | rules_decl | inv_decl | export_decl
             | fn_decl | let_stmt | if_stmt | while_stmt | for_stmt
             | return_stmt | tx | add_stmt | sub_stmt | label_stmt
             | assert_stmt | assign_stmt | expr_stmt ;
@@ -27,9 +27,17 @@ rule_kind   = "width" | "space"
             | "enclosure" | "area" | "density" ;          (* SPECIFIED *)
 cond        = "(" , ident , ">" , int , { "," , ident , ">" , int } , ")" ;  (* SPECIFIED *)
 
+export_decl = "export" , string , "{" , { map_row } , "}" ;
+map_row     = ident , [ "." , ident ] , "->" , lpair ;
+            (* the map must be TOTAL over the design: a layer holding geometry
+               with no row, or a label layer with no `.NAME` row, fails the
+               export and nothing is written. *)
+
 inv_decl    = "invariants" , "{" , inv_name , { "," , inv_name } , "}" ;
 inv_name    = "connectivity"
-            | "ports" | "density" | "schema" ;            (* SPECIFIED *)
+            | "ports" | "density" ;                       (* SPECIFIED *)
+            (* `schema` is not an invariant name: artifact totality is the
+               `export` statement's obligation. *)
 
 fn_decl     = "fn" , ident , "(" , [ ident , { "," , ident } ] , ")" , block ;
 

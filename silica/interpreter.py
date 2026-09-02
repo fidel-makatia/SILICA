@@ -50,6 +50,7 @@ import sys
 
 from silica.engine import Design, SimpleDesign
 from silica.errors import Counterexample, ParseError, SilicaError
+from silica.gds import mapkey as _mapkey, write_gds
 from silica.geometry import Box, UF, union_rect
 
 __all_reexports__ = (Design, SimpleDesign, Counterexample, ParseError,
@@ -68,7 +69,7 @@ TOKEN = re.compile(
     r'"([^"]*)"'
     r'|([A-Za-z_][A-Za-z0-9_]*)'
     r'|(\d+)'
-    r'|(<=|>=|==|!=|&&|\|\|)'
+    r'|(<=|>=|==|!=|&&|\|\||->)'
     r'|([{}()\[\],.=+\-*/%<>!])')
 
 
@@ -193,6 +194,8 @@ class Parser:
                 return self.inv_decl()
             if v == "fn":
                 return self.fn_decl()
+            if v == "export":
+                return self.export_decl()
             if v == "let":
                 self.next()
                 name = self.expect("id")
@@ -348,6 +351,27 @@ class Parser:
             rules.append((layer, kind, self.expr(), ln))
         return ("rules", rules)
 
+    def export_decl(self):
+        """export "file.gds" { m3 -> (33,0)   m3.NAME -> (233,0) }"""
+        self.kw("export")
+        path = self.expect("str")
+        self.expect("sym", "{")
+        rows = []
+        while not self.accept("sym", "}"):
+            ln = self.line()
+            if self.peek()[0] == "eof":
+                raise self.err("unterminated export block")
+            layer = self.expect("id")
+            kind = self.expect("id") if self.accept("sym", ".") else None
+            self.expect("sym", "->")
+            self.expect("sym", "(")
+            num = self.expect("int")
+            self.expect("sym", ",")
+            dtype = self.expect("int")
+            self.expect("sym", ")")
+            rows.append((layer, kind, num, dtype, ln))
+        return ("export", path, rows)
+
     def inv_decl(self):
         self.kw("invariants")
         self.expect("sym", "{")
@@ -355,6 +379,11 @@ class Parser:
         while True:
             ln = self.line()
             name = self.expect("id")
+            if name == "schema":
+                raise ParseError(
+                    "`schema` is not a per-tx invariant: artifact totality is "
+                    "enforced by the `export` statement, which refuses to "
+                    "write a design holding data its map does not cover", ln)
             if name in INVARIANTS_SPECIFIED:
                 raise ParseError(
                     "invariant `%s` is specified but not implemented -- "
@@ -594,6 +623,7 @@ class Interp:
         self.prog = prog
         self.backend = design if design is not None else Design()
         self.grid, self.units = 1, "nm"
+        self.top_cell = "TOP"
         self.rules, self.invariants = [], set()
         self.metals, self.vias = set(), set()
         self.results = []
@@ -652,6 +682,7 @@ class Interp:
                              self.cur_line)
         if t == "design":
             self.units, self.grid = s[3], s[4]
+            self.top_cell = s[2]
         elif t == "stack":
             for it in s[1]:
                 if it[0] == "metal":
@@ -698,6 +729,8 @@ class Interp:
             raise _Return(self.eval(s[1], env) if s[1] is not None else None)
         elif t == "expr":
             self.eval(s[1], env)
+        elif t == "export":
+            self.exec_export(s[1], s[2])
         elif t == "tx":
             self.exec_tx(s[1], s[2], env)
         elif t == "add":
@@ -710,6 +743,55 @@ class Interp:
             self.exec_assert(s, env)
         else:
             raise ParseError("unimplemented statement %r" % t, self.cur_line)
+
+    # ---- export: artifact schemas are total ----
+    def exec_export(self, path, rows):
+        """Write the design out, refusing to drop anything unmapped.
+
+        A stream-out that silently skips a layer with no map row is the bug
+        that drops every via cut from a GDS and leaves LVS looking at opens.
+        The rule here has no exception: if the design holds a datum the map
+        does not cover, the export fails and writes nothing.
+        """
+        if self.txctx is not None:
+            raise ParseError("`export` is not allowed inside a tx",
+                             self.cur_line)
+        rules = {}
+        for (layer, kind, num, dtype, line) in rows:
+            self.cur_line = line
+            self._known_layer(layer, "export")
+            key = (layer, kind)
+            if key in rules:
+                raise ParseError("duplicate export rule for %s" % _mapkey(key),
+                                 line)
+            rules[key] = (num, dtype)
+
+        be = self.backend
+        shapes = be.shapes if hasattr(be, "shapes") else {}
+        missing = []
+        for layer, boxes in sorted(shapes.items()):
+            if boxes and (layer, None) not in rules:
+                missing.append(_mapkey((layer, None)))
+        for (layer, _t, _x, _y) in getattr(be, "labels", []):
+            if (layer, "NAME") not in rules:
+                k = _mapkey((layer, "NAME"))
+                if k not in missing:
+                    missing.append(k)
+        if missing:
+            raise Counterexample(
+                "export", "unmapped-datum", [], [],
+                "%s: the design holds data with no map rule: %s"
+                % (path, ", ".join(sorted(missing))))
+
+        unused = [_mapkey(k) for k in rules
+                  if k[1] is None and not shapes.get(k[0])]
+        n = write_gds(path, self.top_cell, shapes,
+                      getattr(be, "labels", []), rules, self.grid, self.units)
+        print("[silica export] %s: %d element(s), %d map rule(s)%s"
+              % (path, n, len(rules),
+                 "" if not unused else
+                 " (%d rule(s) matched no geometry: %s)"
+                 % (len(unused), ", ".join(sorted(unused)))))
 
     # ---- transactions ----
     def exec_tx(self, name, body, env):
