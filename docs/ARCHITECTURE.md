@@ -185,9 +185,9 @@ native tool, either silent or a warning that scrolled past.
       │                                  touches 2+ nets        → bridge
       │                                  touches the wrong net  → wrong-net
       │                                  `new_net` touches any  → not-new
-      │                                each `sub` checked NOW:
-      │                                  net count up   w/o `splitting` → split
-      │                                  net count down w/o `deleting`  → delete
+      │                                each `sub` checked NOW, per net:
+      │                                  a net fans out w/o `splitting` → split
+      │                                  a net vanishes w/o `deleting`  → delete
       │                                each `label` checked NOW:
       │                                  attaches to no metal   → floating
       │
@@ -204,12 +204,19 @@ native tool, either silent or a warning that scrolled past.
 
 Two things are easy to get wrong here and are worth stating explicitly.
 
-**The connectivity delta must be declared, not discovered.** `on new_net`
-declares +1, `merge(a,b)` declares −1, `sub ... splitting` and `sub ...
-deleting` declare the measured change. Anything else that moves the net count
-fails the commit. This generalizes the flat conductor-count check that was the
-only thing standing between one padframe campaign and several silently shorted
-nets — except here it is per-net precise and non-optional.
+**The connectivity effect must be declared, not discovered — and it is checked
+per net, not as a count.** `on new_net` declares a creation, `merge(a,b)` a
+union, `sub ... splitting` a split, `sub ... deleting` a removal. At each `sub`
+every surviving component is correlated back to the net it came from, so each
+pre-net is classified individually.
+
+Counting was the first implementation and it was unsound, in a way worth
+stating plainly because it is the same shape as the field bug this project was
+founded on: **scalars cancel.** One subtraction that split a net in two while
+deleting another left the count unchanged, so nothing was declared and it
+committed. The hand-maintained flat conductor count that caught the original
+short is blind to exactly this, by construction. Counting is an approximation
+of the invariant; the invariant is about the partition.
 
 **Rules are checked against what the transaction left behind, not what it
 added.** A subtraction can thin a wire below minimum width exactly as easily as
@@ -365,7 +372,7 @@ SILICA/
 
 | Layer | Status |
 |---|---|
-| Transform layer (language + tx + connectivity + width/space) | **implemented; 115 checks green on both backends** |
+| Transform layer (language + tx + connectivity + width/space) | **implemented; 121 checks green on both backends** |
 | Backend protocol + pure-Python + KLayout backends | **implemented; shared conformance corpus** |
 | Strict name resolution (no silent no-op checks) | **implemented** |
 | Conditional rules (`m3.space(wide>W) >= S`) | in the grammar; **refused** until checked |

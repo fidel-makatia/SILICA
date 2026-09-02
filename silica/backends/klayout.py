@@ -101,6 +101,36 @@ class KLayoutBackend:
                     for m in self.metals)
 
     @staticmethod
+    def _net_key(comps, members):
+        best = None
+        for (m, i) in members:
+            bb = comps[m][i].bbox()
+            key = (m, bb.left, bb.bottom)
+            if best is None or key < best:
+                best = key
+        return best
+
+    def net_probe(self, nid):
+        """A point ON the net, not merely in its bounding box.
+
+        The id is derived from the lowest bounding-box corner, which for an
+        L-shaped polygon can sit in the notch -- outside the shape. A hull
+        vertex is always on the contour, and KLayout counts the contour as
+        inside.
+        """
+        comps = self._components()
+        for mem in self._partition(comps).values():
+            if self._net_id(comps, mem) != nid:
+                continue
+            m, i = min(mem, key=lambda mi: (mi[0],
+                                            comps[mi[0]][mi[1]].bbox().left,
+                                            comps[mi[0]][mi[1]].bbox().bottom))
+            pt = min((p for p in comps[m][i].each_point_hull()),
+                     key=lambda q: (q.x, q.y))
+            return (m, pt.x, pt.y)
+        return None
+
+    @staticmethod
     def _net_id(comps, members):
         """Stable, printable net id: the net's lowest polygon corner.
 

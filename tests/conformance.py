@@ -96,6 +96,37 @@ tx wipe { sub m3 box(0,180,1000,320) }
 """,
          [OK, ("wipe", False, "delete")]),
 
+    # A net count is a scalar and scalars cancel. This subtraction splits one
+    # net in two AND deletes another: the count is unchanged, so a count-based
+    # invariant declares nothing and commits. The effect must be checked
+    # structurally -- per pre-net -- or the invariant is unsound.
+    Case("a split that cancels a delete in the count is still caught",
+         STACK + """tx seed {
+  add m3 box(0,   0, 1000, 100) on new_net
+  add m3 box(400, 200,  500, 300) on new_net
+}
+tx swap { sub m3 box(400, 0, 500, 300) }
+""",
+         [OK, ("swap", False, "split")]),
+
+    Case("declaring only `splitting` still catches the deletion",
+         STACK + """tx seed {
+  add m3 box(0,   0, 1000, 100) on new_net
+  add m3 box(400, 200,  500, 300) on new_net
+}
+tx swap { sub m3 box(400, 0, 500, 300) splitting }
+""",
+         [OK, ("swap", False, "delete")]),
+
+    Case("declaring both effects commits",
+         STACK + """tx seed {
+  add m3 box(0,   0, 1000, 100) on new_net
+  add m3 box(400, 200,  500, 300) on new_net
+}
+tx swap { sub m3 box(400, 0, 500, 300) splitting deleting }
+""",
+         [OK, ("swap", True, None)]),
+
     Case("declared net deletion commits",
          STACK + SEED2 + """
 tx wipe { sub m3 box(0,180,1000,320) deleting }

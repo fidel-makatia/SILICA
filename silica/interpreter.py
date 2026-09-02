@@ -18,6 +18,7 @@ Backend protocol (all geometry crosses the interface as integer-DBU Box):
     nets() -> {net_id: members}         connectivity partition
     net_count() -> int
     net_at(layer, x, y) -> net_id | None
+    net_probe(net_id) -> (layer, x, y)  a point ON that net's geometry
     nets_touching(layer, box) -> [net_id]   nets the box would connect to
     spacing_violation(layer, win, limit) -> measured | None
     width_violation(layer, win, limit)   -> measured | None
@@ -244,19 +245,28 @@ class Design:
         self.labels.append((layer, text, x, y))
 
     # -- protocol: connectivity --
-    def _net_id(self, members):
-        """A stable, printable id for a net: its lowest shape's layer+corner.
-
-        Shape indices shift on every edit, so they cannot be the identity.
-        Two distinct nets cannot share a lowest shape, so this is unique.
-        """
+    def _net_key(self, members):
+        """The net's lowest (layer, x1, y1). Shape indices shift on every
+        edit, so they cannot be the identity; a geometric corner can."""
         best = None
         for (m, i) in members:
             b = self.shapes[m][i]
             key = (m, b.x1, b.y1)
             if best is None or key < best:
                 best = key
-        return "%s@%d,%d" % best
+        return best
+
+    def _net_id(self, members):
+        """A stable, printable id. Two distinct nets cannot share a lowest
+        shape, so this is unique."""
+        return "%s@%d,%d" % self._net_key(members)
+
+    def net_probe(self, nid):
+        """A point on this net's geometry. Box corners are always on the box."""
+        for n, members in self.nets().items():
+            if n == nid:
+                return self._net_key(members)
+        return None
 
     def nets(self):
         uf = UF()
@@ -1100,25 +1110,45 @@ class Interp:
         ctx.touched.append((layer, box))
 
     def exec_sub(self, s, env):
+        """Subtraction, checked as a TOPOLOGICAL EFFECT rather than a count.
+
+        A net count is a scalar, and scalars cancel: one subtraction that
+        splits one net in two while deleting another leaves the count
+        unchanged, and a count-based check waves it through having declared
+        nothing. So instead of comparing counts, correlate every surviving
+        component back to the net it came from -- any point of retained metal
+        lay inside the pre-state -- and classify each pre-net as survived,
+        split or deleted. Each outcome must then be declared on its own.
+        """
         ctx = self._tx("sub")
         layer, mods = s[1], s[3]
         self._known_layer(layer, "sub")
         box = self._eval_box(s[2], env)
         sh = ctx.shadow
-        before = sh.net_count()
+        before = sh.clone()
+        pre_nets = set(before.nets())
         sh.sub(layer, box)
-        after = sh.net_count()
-        if after > before and "splitting" not in mods:
+        post_nets = list(sh.nets())
+
+        fanout = {}
+        for pn in post_nets:
+            probe = sh.net_probe(pn)
+            origin = before.net_at(*probe) if probe else None
+            fanout[origin] = fanout.get(origin, 0) + 1
+        split = sorted(n for n in pre_nets if fanout.get(n, 0) > 1)
+        deleted = sorted(n for n in pre_nets if fanout.get(n, 0) == 0)
+
+        if split and "splitting" not in mods:
             raise Counterexample(
-                "sub", "split", box.as_list(), [],
-                "nets %d->%d; declare `splitting` if intended"
-                % (before, after))
-        if after < before and "deleting" not in mods:
+                "sub", "split", box.as_list(), split,
+                "%d net(s) split into %d component(s); declare `splitting` "
+                "if intended" % (len(split), sum(fanout[n] for n in split)))
+        if deleted and "deleting" not in mods:
             raise Counterexample(
-                "sub", "delete", box.as_list(), [],
-                "nets %d->%d; declare `deleting` if intended"
-                % (before, after))
-        ctx.allowed_extra += (after - before)
+                "sub", "delete", box.as_list(), deleted,
+                "%d net(s) removed entirely; declare `deleting` if intended"
+                % len(deleted))
+        ctx.allowed_extra += (len(post_nets) - len(pre_nets))
         ctx.touched.append((layer, box))
 
     def exec_label(self, s, env):

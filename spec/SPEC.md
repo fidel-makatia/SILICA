@@ -130,9 +130,20 @@ metal), `assert spacing|width (...) >= expr`. Specified, not implemented:
 
 Implemented as a runtime primitive:
 
-- `connectivity` — at commit, the net count equals the pre-tx count plus
-  exactly the declared delta: `+1` per `on new_net`, `−1` per `merge(a,b)`, and
-  the measured delta for each `sub ... splitting` / `sub ... deleting`.
+- `connectivity` — every change to the net partition must be declared, and it
+  is checked **structurally, per net**, not as a count.
+
+  At each `sub`, every surviving component is correlated back to the net it came
+  from (any point of retained metal lay inside the pre-state), and each pre-net
+  is classified *survived*, *split* or *deleted*. A split requires `splitting`;
+  a deletion requires `deleting`; the two are checked independently. At commit,
+  the count is reconciled against the declared adds (`+1` per `on new_net`,
+  `−1` per `merge(a,b)`) and the classified subtractions.
+
+  A count alone is unsound, because scalars cancel: one subtraction that splits
+  one net in two while deleting another leaves the count unchanged, and a
+  count-based invariant would declare nothing and commit. See
+  `tests/conformance.py`, "a split that cancels a delete in the count".
 
 Also implemented, and always on when declared in `rules`:
 

@@ -41,6 +41,15 @@ machine-readable **counterexamples** that feed the agent's next step.
 by* agents, not *powered by* them. Humans and Makefiles are equally welcome
 authors.
 
+The point is not expressiveness — it is **confinement**. A guarded library still
+exposes its own internals: an agent that can call `guarded_add()` can also
+append to the shape list directly, catch the exception, or write its own helper
+that skips the guard. That is not hypothetical; it is the first row of the table
+below, and it cost a signoff round. SILICA has no such escape: there is no
+expressible program that mutates geometry without passing the check, for the
+same reason you sandbox an agent's tool calls rather than trusting it to use the
+safe API.
+
 > **Note on process data.** SILICA is developed alongside work under foundry
 > NDAs. **This repository contains no process data.** Every layer number,
 > grid, spacing value, coordinate, cell name and design name in it — in the
@@ -56,7 +65,7 @@ cd SILICA
 pip install -e .            # zero dependencies; add ".[klayout]" for the KLayout backend
 
 silica examples/fix_notch.sil        # run a program
-make test                            # 115 checks across 6 suites, ~10 seconds
+make test                            # 121 checks across 6 suites, ~10 seconds
 ```
 
 ## 🧨 Why SILICA exists
@@ -149,6 +158,47 @@ Inputs are content-hashed before the tool runs; outputs are verified after;
 unchanged steps are **cache hits**. Change one RTL file and everything from
 synthesis onward rebuilds — and nothing else does.
 
+## 🔍 Prior art, and what is actually new here
+
+Most of the individual mechanisms in SILICA exist in shipping tools. Saying so
+first is the point; a reader who has worked on any of these will place them
+within a minute.
+
+| Mechanism | Prior art |
+|---|---|
+| DRC feedback at edit time, on the real deck | Siemens **Calibre RealTime** (Custom and Digital) — a decade-plus old, and it runs foundry-qualified rules rather than reimplemented ones |
+| Preventing an edit that would violate a rule | Cadence **design-rule-driven editing / LiveDRD**, plus a patent family on rule-driven editing to cut edit-verify iterations |
+| Correct-by-construction layout from a constrained API | **BAG / Laygo** — templates and grids that make violations unrepresentable; real taped-out silicon |
+| Content-hashed hermetic build steps | **Bazel**, **Nix**, and **SiliconCompiler** for EDA specifically |
+| Agent proposes → deterministic checker → counterexample → retry | now the standard agentic framing; **ARGUS** does it for data-flow invariants with SMT and emits a concrete counterexample naming the offending thread and program point |
+
+Against that, three things here are not standard practice:
+
+**1. Connectivity change as a declared effect.** Every tool above checks
+topology *after* an edit. SILICA makes the topological effect part of the edit —
+`on new_net`, `merge(a,b)`, `sub ... splitting`, `sub ... deleting` — and an
+undeclared change to the net partition is a rollback. This is a frame condition
+in the sense of an effect system: a signature for what an operation is permitted
+to disturb, applied to layout topology. It is the part worth formalizing, and
+the part most likely to be genuinely new.
+
+**2. Atomic rollback across a composite edit.** Interactive DRD is per-edit and
+GUI-coupled. A SILICA transaction can be a loop that places sixty shapes, and if
+the fifty-ninth bridges, all sixty are rolled back. A machine author never
+inspects a half-applied change.
+
+**3. Refusing to accept a check it cannot perform.** A conditional spacing rule
+is in the grammar and is *rejected*, not parsed-and-ignored. Most tools would
+accept it and warn. There is no warning class here, and that applies reflexively
+to SILICA's own unfinished features.
+
+What is **not** claimed: that local width/space checking is new (it is not, and
+the checks here are weaker than a real deck); that this replaces signoff; or
+that any of it is yet validated against a controlled baseline. The evaluation in
+[`eval/PLAN.md`](eval/PLAN.md) is pre-registered and **not yet run** — and its
+honest third arm is a plain Python-plus-asserts wrapper, which may well capture
+most of the benefit. If it does, that is the finding.
+
 ## 🏗 Architecture
 
 ```
@@ -207,7 +257,7 @@ silica/                 the language implementation
 spec/                   language definition · grammar · invariant/field-bug map
 docs/ARCHITECTURE.md    system design & where the LLM sits (and doesn't)
 examples/               runnable programs, incl. replays of real fix classes
-tests/                  6 suites / 115 checks; conformance.py is the backend contract
+tests/                  6 suites / 121 checks; conformance.py is the backend contract
 eval/                   pre-registered evaluation plan vs. a logged campaign
 ```
 

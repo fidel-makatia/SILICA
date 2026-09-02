@@ -14,14 +14,23 @@ error.**
 
 ## 1. `connectivity` — implemented
 
-**Statement.** At tx commit, the number of nets (connected components of
-geometry × declared stack) equals the pre-tx count plus exactly the declared
-delta: `+1` per `on new_net`, `−1` per `merge(a,b)`, and the measured delta for
-each `sub ... splitting` / `sub ... deleting`.
+**Statement.** Every change to the net partition must be declared, and is
+checked per net rather than as a total. `on new_net` declares a creation,
+`merge(a,b)` a union, `sub ... splitting` a split, `sub ... deleting` a
+removal. An undeclared change to the partition fails the transaction.
 
 **Enforced by.** Union-find over shape adjacency per metal, linked through
-declared vias, recomputed on the shadow copy at commit — plus a per-edit check
-at every `add`, which is what produces the useful counterexample.
+declared vias. At every `add`, the shape's touched-net set is checked against
+what was declared. At every `sub`, each surviving component is correlated back
+to the net it came from — any point of retained metal lay inside the pre-state
+— so each pre-net is classified survived, split or deleted, and each outcome is
+required to have been declared on its own.
+
+**Why not a count.** The first implementation compared net counts before and
+after, which is unsound: scalars cancel. A single subtraction that split one net
+in two while deleting another left the count unchanged, declared nothing, and
+committed. Counting is an approximation of the invariant; the invariant is about
+the *partition*.
 
 **Failure classes answered.**
 
@@ -36,6 +45,11 @@ at every `add`, which is what produces the useful counterexample.
   chaining a column of nets together. Two independent defences here: the `box`
   constructor rejects the inverted interval, and even if the geometry were
   legal the add would touch two nets and roll back.
+- *The cancelling edit.* One subtraction that both splits a net and removes
+  another leaves the conductor count untouched. Every count-based guard — the
+  hand-maintained flat conductor count included — is blind to it by
+  construction. This is the class that motivated moving from a scalar delta to
+  a per-net effect.
 - *The "connected" pin that wasn't.* A router reported a pin as routed while
   the wire ended a few hundred nanometres short. `add ... on net_at(...)`
   resolves a point by exact containment: a point one database unit outside a
