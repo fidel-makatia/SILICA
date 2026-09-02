@@ -332,9 +332,11 @@ Two things are worth knowing before trusting a check on imported geometry.
 
 **Connectivity is exact.** Geometry arrives as rectangles — each layer merged,
 then decomposed — and abutting rectangles are one component regardless of how
-they were cut. Validated against a real routed design: on OpenROAD's `gcd` on
-sky130 (13,291 shapes over met1–met5 and four via layers), SILICA and KLayout's
-`LayoutToNetlist` extractor independently agree on **712 nets**.
+they were cut. Validated against real routed designs on sky130: OpenROAD's
+`gcd` (13,291 shapes, both extractors say **712 nets**) and its
+`aes_cipher_top` (37,788 cells, **540,071 shapes**, both extractors say
+**18,396 nets**). At AES scale extraction takes 10.2 s in 0.8 GB, and a
+transaction's shadow copy of the whole design takes 0.45 s.
 
 **Width is not.** SILICA measures width per stored rectangle. When you author
 geometry you choose that decomposition; when you import it, the source tool

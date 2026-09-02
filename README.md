@@ -201,21 +201,35 @@ most of the benefit. If it does, that is the finding.
 
 ## 🔬 On a real routed chip
 
-`examples/sky130_eco.sil` runs against a real design: `gcd`, synthesized,
-placed and routed by OpenROAD on the open SkyWater **sky130** PDK. (Those layer
-numbers are real — sky130 is an open PDK.)
+`examples/sky130_eco.sil` runs against real designs synthesized, placed and
+routed by OpenROAD on the open SkyWater **sky130** PDK. (Those layer numbers
+are real — sky130 is an open PDK.)
 
-- **Connectivity agrees with a mature extractor, exactly.** 13,291 shapes over
-  met1–met5 and four via layers; SILICA extracts **712 nets** and KLayout's
-  `LayoutToNetlist` independently extracts **712 nets**. Import takes 0.6 s.
-- **An ECO that would short two real nets is refused**, naming both:
-  `{"rule": "bridge", "nets": ["met1@46085,17395", "met1@990,23160"]}` — two
-  wires that pass within 140 nm of each other in the routed database.
-- **A limitation this found:** a declared `width` rule fires on imported
-  geometry that KLayout's own width check says is clean, because SILICA
-  measures width per stored rectangle and import chooses the decomposition.
-  Connectivity is unaffected. Documented in `docs/ARCHITECTURE.md` §6.1, pinned
-  by `tests/test_import.py`, and on the roadmap above.
+**Connectivity agrees with a mature extractor, exactly**, on both:
+
+| design | cells | shapes in | SILICA | KLayout `LayoutToNetlist` | |
+|---|---|---|---|---|---|
+| `gcd` | 710 | 13,291 | **712 nets** | **712 nets** | agree |
+| `aes_cipher_top` | 37,788 | **540,071** | **18,396 nets** | **18,396 nets** | agree |
+
+On the AES core (475 µm², 58% utilization): import 6.2 s, extraction 10.2 s,
+peak RSS 0.8 GB. A transaction's shadow copy of all 540k shapes takes **0.45 s**
+— that is the rollback primitive at real scale, not a toy.
+
+**An ECO that would short two real nets is refused**, naming both. In the AES
+database two met1 wires pass within 140 nm of each other; a patch across the
+gap gets:
+
+```json
+ROLLBACK shorting_patch {"rule": "bridge",
+  "nets": ["met1@140830,1740", "met1@161530,1400"]}
+```
+
+**A limitation this found:** a declared `width` rule fires on imported geometry
+that KLayout's own width check says is clean, because SILICA measures width per
+stored rectangle and import chooses the decomposition. Connectivity is
+unaffected. Documented in `docs/ARCHITECTURE.md` §6.1, pinned by
+`tests/test_import.py`, and on the roadmap above.
 
 ## 📊 Does it actually help? (`eval/benchmark.py`)
 
