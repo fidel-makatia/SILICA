@@ -46,7 +46,10 @@ block       = "{" , { stmt } , "}" ;
 (* ---- transactions ---- *)
 tx          = "tx" , ident , block ;
 add_stmt    = "add" , ident , expr , "on" , net_expr ;
-sub_stmt    = "sub" , ident , expr , { "splitting" | "deleting" } ;
+sub_stmt    = "sub" , ident , expr , { sub_mod } ;
+sub_mod     = ( "splitting" | "deleting" ) , [ "into" ] , [ int ] ;
+            (* bare = loose ("at least one"); with a count = exact.
+               `splitting n` declares n ADDED nets; `deleting n`, n removed. *)
 label_stmt  = "label" , ident , expr , "at" , point ;
 assert_stmt = "assert" , check_expr , ">=" , expr ;
 

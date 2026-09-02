@@ -228,14 +228,26 @@ class Parser:
                 self.next()
                 layer = self.expect("id")
                 bx = self.expr()
-                mods = set()
+                mods = {}
                 while True:
                     if self.accept("id", "splitting"):
-                        mods.add("splitting")
+                        key = "splitting"
                     elif self.accept("id", "deleting"):
-                        mods.add("deleting")
+                        key = "deleting"
                     else:
                         break
+                    if key in mods:
+                        raise self.err("`%s` declared twice" % key)
+                    self.accept("id", "into")
+                    n = None
+                    if self.peek()[0] == "int":
+                        ln2 = self.line()
+                        n = self.expect("int")
+                        if n < 1:
+                            raise ParseError(
+                                "`%s %d` declares nothing; omit the count to "
+                                "declare the effect loosely" % (key, n), ln2)
+                    mods[key] = n
                 return ("sub", layer, bx, mods)
             if v == "label":
                 self.next()
@@ -707,7 +719,9 @@ class Interp:
         ctx = type("Ctx", (), {})()
         ctx.shadow = shadow
         ctx.pre = shadow.net_count()
-        ctx.declared_new = ctx.allowed_extra = 0
+        ctx.declared_new = 0
+        ctx.declared_split = ctx.declared_delete = 0
+        ctx.loose = False
         ctx.touched = []
         self.txctx = ctx
         try:
@@ -824,18 +838,37 @@ class Interp:
             fanout[origin] = fanout.get(origin, 0) + 1
         split = sorted(n for n in pre_nets if fanout.get(n, 0) > 1)
         deleted = sorted(n for n in pre_nets if fanout.get(n, 0) == 0)
+        # a net that fans out to k components adds k-1 nets
+        gained = sum(fanout[n] - 1 for n in split)
+        lost = len(deleted)
 
         if split and "splitting" not in mods:
             raise Counterexample(
                 "sub", "split", box.as_list(), split,
-                "%d net(s) split into %d component(s); declare `splitting` "
-                "if intended" % (len(split), sum(fanout[n] for n in split)))
+                "%d net(s) split, adding %d net(s); declare `splitting` "
+                "if intended" % (len(split), gained))
         if deleted and "deleting" not in mods:
             raise Counterexample(
                 "sub", "delete", box.as_list(), deleted,
                 "%d net(s) removed entirely; declare `deleting` if intended"
-                % len(deleted))
-        ctx.allowed_extra += (len(post_nets) - len(pre_nets))
+                % lost)
+        want_split = mods.get("splitting")
+        if want_split is not None and want_split != gained:
+            raise Counterexample(
+                "sub", "split-count", box.as_list(), split,
+                "declared `splitting %d`, measured %d" % (want_split, gained))
+        want_del = mods.get("deleting")
+        if want_del is not None and want_del != lost:
+            raise Counterexample(
+                "sub", "delete-count", box.as_list(), deleted,
+                "declared `deleting %d`, measured %d" % (want_del, lost))
+
+        # An exact count is a declaration; a bare modifier is a deliberate
+        # weakening, and the measured value stands in for it.
+        ctx.declared_split += gained if want_split is None else want_split
+        ctx.declared_delete += lost if want_del is None else want_del
+        ctx.loose = ctx.loose or (("splitting" in mods and want_split is None)
+                                  or ("deleting" in mods and want_del is None))
         ctx.touched.append((layer, box))
 
     def exec_label(self, s, env):
@@ -870,13 +903,19 @@ class Interp:
 
     def check_commit(self, ctx):
         if "connectivity" in self.invariants:
+            # Redundant with the per-edit checks by the soundness argument in
+            # SPEC section 5 -- which is exactly why it is worth running: it is
+            # the cross-check that catches a backend whose partition disagrees
+            # with the effects the interpreter believes it applied.
             post = ctx.shadow.net_count()
-            want = ctx.pre + ctx.declared_new + ctx.allowed_extra
+            want = (ctx.pre + ctx.declared_new
+                    + ctx.declared_split - ctx.declared_delete)
             if post != want:
                 raise Counterexample(
                     "connectivity", "net-count", [], [],
-                    "%d+%d+%d declared, got %d"
-                    % (ctx.pre, ctx.declared_new, ctx.allowed_extra, post))
+                    "declared %d%+d%+d%+d = %d nets, measured %d"
+                    % (ctx.pre, ctx.declared_new, ctx.declared_split,
+                       -ctx.declared_delete, want, post))
         # local rules: evaluated on the final shadow, in the halo of every
         # shape the tx touched -- `add` AND `sub`, so a subtraction that thins
         # a wire below the minimum is caught exactly like an undersized add.

@@ -145,6 +145,61 @@ Implemented as a runtime primitive:
   count-based invariant would declare nothing and commit. See
   `tests/conformance.py`, "a split that cancels a delete in the count".
 
+  A subtraction's effect may be declared **loosely** (`splitting`, `deleting`:
+  at least one, any amount) or **exactly** (`splitting into 2`, `deleting 1`).
+  An exact declaration that does not match the measured effect is a rollback.
+
+### 5.1 Soundness of the connectivity effect
+
+Let `T` be a transaction that commits, `P` the net partition of the design
+before it and `P'` the partition after. Let `a` be the number of
+`add … on new_net` statements executed, `m` the number of
+`add … on merge(x,y)`, `s` the declared split increment and `d` the declared
+deletion count. Then:
+
+> **(1)**  `|P'| = |P| + a − m + s − d`
+>
+> **(2)**  every block of `P` is related to `P'` by exactly one of: it
+> survives; it is merged with exactly one other block by a declared `merge`;
+> it splits into `k ≥ 2` blocks under a declared `splitting`; or it disappears
+> under a declared `deleting`.
+
+*Proof sketch,* by induction over the statements of `T`. Only four statement
+forms can change the partition, and each commits only under a checked
+precondition:
+
+- `add … on new_net` commits only if `nets_touching(layer, box) = ∅`. A shape
+  touching no existing net forms its own component, so `|P| → |P| + 1` and
+  every other block is unchanged.
+- `add … on net_at(n)` commits only if `nets_touching = {n}`. The shape joins
+  exactly one block; `|P|` is unchanged.
+- `add … on merge(x,y)` commits only if `nets_touching = {x, y}` with `x ≠ y`.
+  Exactly two blocks become one, so `|P| → |P| − 1`.
+- `sub` classifies **every** block of the current partition by its fanout into
+  the post-partition — computed by correlating each surviving component back to
+  the block containing a point of its retained metal — and requires `deleting`
+  for fanout 0, `splitting` for fanout ≥ 2, and equality with any declared
+  exact count.
+
+Every partition-changing statement is one of these, so the composition of their
+effects is exactly the declared total, giving (1) and (2). ∎
+
+Three honest caveats:
+
+1. The argument is about the **abstract partition**. It assumes the backend's
+   `nets` and `nets_touching` agree with the true connectivity of the geometry
+   it stores. That assumption is *tested*, not proved:
+   `tests/conformance.py` pins the verdicts across backends and
+   `tests/test_engine.py` fuzzes the indexed engine against a naive one over
+   randomized edit sequences.
+2. The **loose** forms weaken (2) to "at least one", and substitute the
+   measured value into (1). Use the exact forms where the effect is known.
+3. This is a pen-and-paper argument, not a mechanized proof.
+
+Given (1), the commit-time net-count check is *redundant* — which is precisely
+why SILICA still runs it. It is the cross-check that catches a backend whose
+partition disagrees with the effects the interpreter believes it applied.
+
 Also implemented, and always on when declared in `rules`:
 
 - `width` / `space` minima, evaluated on the final shadow in the halo of every
