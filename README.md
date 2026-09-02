@@ -232,40 +232,48 @@ union of the geometry, so the decomposition cannot change the answer — verifie
 against KLayout on 3,000 randomized layouts and on AES's 246,049 met1
 rectangles. See `docs/ARCHITECTURE.md` §6.1.
 
-### Across designs and PDKs (`make validate`)
+### Across 36 designs and 6 PDKs (`make validate`)
 
 `eval/validate_designs.py` walks every finished OpenROAD result, derives the
 routing stack from whatever the platform ships (a KLayout tech file's inline
 layer map, a stream map, or layer properties), and compares SILICA against
 KLayout on identical geometry — union-find nets vs `LayoutToNetlist`, and the
 projection-metric width check vs `Region.width_check`. Each design runs in its
-own process, so a design that is OOM-killed becomes a recorded row rather than
-a truncated table.
+own process, so one that is OOM-killed becomes a recorded row rather than a
+truncated table that looks complete.
 
-Confirmed so far, across **five PDKs**:
+```
+36 designs checked   35 agree on nets   36 agree on width
+31,051,274 shapes
+```
+
+Six PDKs — **sky130hd, sky130hs, nangate45, asap7, gf180, ihp-sg13g2** — from
+15k-shape blocks to 3.6M-shape cores. The largest:
 
 | PDK | design | shapes | SILICA | KLayout | |
 |---|---|---|---|---|---|
+| asap7 | mock-cpu | 3,641,040 | 231,992 | 231,992 | agree |
+| asap7 | ethmac | 3,499,106 | 226,792 | 226,792 | agree |
+| sky130hd | jpeg | 3,325,585 | 141,249 | 141,249 | agree |
+| asap7 | jpeg | 3,043,360 | 189,174 | 189,174 | agree |
+| nangate45 | jpeg | 1,833,217 | 159,854 | 159,854 | agree |
 | asap7 | ibex | 1,392,544 | 86,950 | 86,950 | agree |
+| sky130hd | ibex | 1,278,413 | 46,390 | 46,390 | agree |
 | ihp-sg13g2 | aes | 1,219,572 | 36,962 | 36,962 | agree |
 | sky130hd | aes | 1,119,207 | 35,994 | 35,994 | agree |
-| asap7 | aes | 745,170 | 43,054 | 43,054 | agree |
-| sky130hd | gcd | 33,005 | 1,504 | 1,504 | agree |
-| ihp-sg13g2 | gcd | 31,495 | 1,342 | 1,342 | agree |
-| ihp-sg13g2 | i2c-gpio-expander | 28,177 | 2,145 | 2,145 | agree |
-| nangate45 | gcd | 18,223 | 1,157 | 1,157 | agree |
-| sky130hs | gcd | 18,218 | 2,564 | 2,564 | agree |
-| ihp-sg13g2 | spi | 15,515 | 691 | 691 | agree |
 
-**~4.6 million shapes, zero disagreements.** 32 designs were built across
-sky130hd, sky130hs, nangate45, asap7, gf180 and ihp-sg13g2; the sweep over the
-rest is a matter of compute time, not of anything being unresolved.
+**One design disagrees, and it stays in the table.** On `nangate45/tinyRocket`
+(1,079,521 shapes) SILICA finds 88,494 nets and KLayout 88,496 — SILICA merges
+two pairs KLayout keeps apart, 2 in 88,496. It is not a stack-derivation
+artifact (the derived nangate45 stack is ten metals and nine vias with no
+duplicate GDS layers) and it is not corner-touching (both engines join
+corner-touching boxes). It is unresolved, it is the dangerous direction —
+over-connecting means a real short could read as one net — and it is on the
+roadmap. Reporting 35/36 is the point; a harness that quietly dropped the
+awkward one would be the failure this project exists to remove.
 
-What the harness cannot check, it prints and does not count as passing: a
-design skipped on size (`--max-gb`), a platform whose stack it cannot derive,
-and any design whose process crashed or timed out. A harness that quietly
-dropped those would be committing the exact failure this project exists to
-remove — and it did, twice, before those were fixed.
+Also not counted as passing: one design skipped on size (3.6 GB, over
+`--max-gb`).
 
 ## 📊 Does it actually help? (`eval/benchmark.py`)
 
@@ -377,6 +385,7 @@ eval/                   pre-registered evaluation plan vs. a logged campaign
 - [ ] sandboxed flow steps (undeclared-input detection)
 - [x] `import`: read an OpenROAD/KLayout layout in and edit it
 - [x] exact rectilinear width, so rules hold on imported geometry
+- [ ] resolve nangate45/tinyRocket: SILICA merges 2 nets KLayout separates
 - [ ] OpenROAD / Innovus / OpenAccess backends
 - [ ] the eval: replay a logged padframe campaign, publish rounds-to-clean
 
