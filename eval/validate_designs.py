@@ -47,6 +47,48 @@ def parse_lyp(path):
     return out
 
 
+def parse_lyt(path):
+    """KLayout tech file: <layer-map>layer_map(\'M1 : 19/0\';...)</layer-map>."""
+    txt = open(path, errors="ignore").read()
+    out = {}
+    for blk in re.findall(r"<layer-map>(.*?)</layer-map>", txt, re.S):
+        for m in re.finditer(r"'([^':]+?)\s*:\s*(\d+)/(\d+)'", blk):
+            out.setdefault(m.group(1).strip() + ".drawing",
+                           (int(m.group(2)), int(m.group(3))))
+    return out
+
+
+def parse_layermap(path):
+    """Stream map: `Name Kind layer datatype` per row, as fed to stream-out."""
+    out = {}
+    with open(path, errors="ignore") as f:
+        for line in f:
+            t = line.split()
+            if len(t) >= 4 and t[2].isdigit() and t[3].isdigit():
+                out.setdefault(t[0] + ".drawing", (int(t[2]), int(t[3])))
+    return out
+
+
+def layer_sources(platform_dir):
+    """Every file that could name this platform's GDS layers, best first.
+
+    Platforms disagree about where this lives: a KLayout tech file with an
+    inline layer_map, a stream map fed to stream-out, or layer-properties.
+    Try all of them rather than assume one.
+    """
+    found = []
+    for root, _d, files in os.walk(platform_dir):
+        for f in files:
+            full = os.path.join(root, f)
+            if f.endswith(".lyt"):
+                found.append((0, parse_lyt, full))
+            elif f.endswith(".layermap") or f.endswith(".map"):
+                found.append((1, parse_layermap, full))
+            elif f.endswith(".lyp"):
+                found.append((2, parse_lyp, full))
+    return [(fn, p) for _r, fn, p in sorted(found, key=lambda x: x[0])]
+
+
 def derive_stack(lyp):
     """(metals, vias) as ordered [(name, layer, dtype)] / [(name, l, d, a, b)].
 
@@ -162,23 +204,28 @@ def main(flow, max_gb=DEFAULT_MAX_GB):
     results = os.path.join(flow, "results")
     rows = []
     for platform in sorted(os.listdir(results)):
-        lyps = []
-        for root, _d, files in os.walk(os.path.join(plats, platform)):
-            lyps += [os.path.join(root, f) for f in files if f.endswith(".lyp")]
         pdir = os.path.join(results, platform)
         designs = [d for d in sorted(os.listdir(pdir))
                    if os.path.exists(os.path.join(pdir, d, "base",
                                                   "6_final.gds"))]
-        if not lyps:
-            _unstacked(rows, platform, designs,
-                       "no KLayout layer-properties file for this platform")
-            continue
-        metals, vias = derive_stack(parse_lyp(lyps[0]))
+        metals = vias = None
+        tried = []
+        for fn, src in layer_sources(os.path.join(plats, platform)):
+            tried.append(os.path.basename(src))
+            try:
+                m, v = derive_stack(fn(src))
+            except Exception:                          # noqa: BLE001
+                continue
+            if m and len(m) >= 2 and v:
+                metals, vias, used = m, v, os.path.basename(src)
+                break
         if not metals:
             _unstacked(rows, platform, designs,
-                       "could not derive a routing stack from %s"
-                       % os.path.basename(lyps[0]))
+                       "no routing stack derivable from %s"
+                       % (", ".join(tried[:4]) or "any file"))
             continue
+        print("  %-11s stack from %s: %d metals, %d vias"
+              % (platform, used, len(metals), len(vias)), flush=True)
         for design in sorted(os.listdir(os.path.join(results, platform))):
             base = os.path.join(results, platform, design, "base")
             gds = os.path.join(base, "6_final.gds")
