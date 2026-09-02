@@ -232,6 +232,33 @@ union of the geometry, so the decomposition cannot change the answer — verifie
 against KLayout on 3,000 randomized layouts and on AES's 246,049 met1
 rectangles. See `docs/ARCHITECTURE.md` §6.1.
 
+### Across designs and PDKs (`make validate`)
+
+`eval/validate_designs.py` walks every finished OpenROAD result, derives the
+routing stack from the platform's own KLayout layer-properties file, and
+compares SILICA against KLayout on identical geometry — union-find nets vs
+`LayoutToNetlist`, and the projection-metric width check vs
+`Region.width_check`.
+
+```
+ihp-sg13g2  gcd                  31,495 shapes   1,342 =  1,342   AGREE
+ihp-sg13g2  i2c-gpio-expander    28,177 shapes   2,145 =  2,145   AGREE
+ihp-sg13g2  spi                  15,515 shapes     691 =    691   AGREE
+nangate45   gcd                  18,223 shapes   1,157 =  1,157   AGREE
+sky130hd    aes               1,119,207 shapes  35,994 = 35,994   AGREE
+sky130hd    gcd                  33,005 shapes   1,504 =  1,504   AGREE
+sky130hs    gcd                  18,218 shapes   2,564 =  2,564   AGREE
+
+7 designs checked, 7 agree on nets, 7 agree on width
+total shapes checked: 1,263,840
+```
+
+Four PDKs so far, one of them at over a million shapes. What it does **not**
+check, it says so and does not count as passing: a 3.6 GB design skipped on
+size, and three asap7 designs whose `.lyp` carries no derivable stack. A
+harness that quietly dropped those would be committing the exact sin this
+project exists to remove.
+
 ## 📊 Does it actually help? (`eval/benchmark.py`)
 
 Nine bugs from the failure taxonomy, attempted three ways. An arm "caught" a

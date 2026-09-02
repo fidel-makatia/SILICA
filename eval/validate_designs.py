@@ -57,8 +57,10 @@ def derive_stack(lyp):
     metals, vias = {}, {}
     for full, (num, dt) in lyp.items():
         if "." not in full:
-            continue
-        name, purpose = full.rsplit(".", 1)
+            # some platforms ship a .lyp with bare layer names and no purpose
+            name, purpose = full, "drawing"
+        else:
+            name, purpose = full.rsplit(".", 1)
         if purpose != "drawing":
             continue
         low = name.lower()
@@ -68,13 +70,13 @@ def derive_stack(lyp):
         if low in SPECIAL_VIAS:
             vias[SPECIAL_VIAS[low]] = (name, num, dt)
             continue
-        m = re.fullmatch(r"(met|metal|m|tm)(\d+)", low)
+        m = re.fullmatch(r"(met|metal|m|tm)(\d+)[a-z]*", low)
         if m:
-            metals[int(m.group(2))] = (name, num, dt)
+            metals.setdefault(int(m.group(2)), (name, num, dt))
             continue
-        m = re.fullmatch(r"(via|v)(\d+)", low)
+        m = re.fullmatch(r"(via|v)(\d+)[a-z]*", low)
         if m:
-            vias[int(m.group(2))] = (name, num, dt)
+            vias.setdefault(int(m.group(2)), (name, num, dt))
     if len(metals) < 2:
         return None, None
     order = sorted(metals)
@@ -90,6 +92,22 @@ def derive_stack(lyp):
             continue
         vs.append(vias[k] + (a, b))
     return ms, vs
+
+
+def _unstacked(rows, platform, designs, why):
+    """Record, loudly, that a platform could not be checked.
+
+    Dropping it from the table would be the exact failure this project exists
+    to remove: a check that quietly did nothing, indistinguishable from one
+    that passed.
+    """
+    print("  %-11s %-16s  NO STACK: %s" % (platform, "(%d designs)"
+                                           % len(designs), why), flush=True)
+    for d in designs:
+        rows.append({"platform": platform, "design": d, "shapes": None,
+                     "silica_nets": None, "klayout_nets": None,
+                     "verdict": "NO-STACK", "width_agree": False,
+                     "def_nets": None, "note": why})
 
 
 def klayout_nets(gds, top, metals, vias):
@@ -133,7 +151,13 @@ def def_nets(defpath):
     return None
 
 
-def main(flow):
+# A GDS far above this is skipped by default: reading one costs tens of GB and
+# tens of minutes, which is a different experiment from "do the two engines
+# agree". Raise it with --max-gb if that is the experiment you want.
+DEFAULT_MAX_GB = 0.5
+
+
+def main(flow, max_gb=DEFAULT_MAX_GB):
     plats = os.path.join(flow, "platforms")
     results = os.path.join(flow, "results")
     rows = []
@@ -141,15 +165,34 @@ def main(flow):
         lyps = []
         for root, _d, files in os.walk(os.path.join(plats, platform)):
             lyps += [os.path.join(root, f) for f in files if f.endswith(".lyp")]
+        pdir = os.path.join(results, platform)
+        designs = [d for d in sorted(os.listdir(pdir))
+                   if os.path.exists(os.path.join(pdir, d, "base",
+                                                  "6_final.gds"))]
         if not lyps:
+            _unstacked(rows, platform, designs,
+                       "no KLayout layer-properties file for this platform")
             continue
         metals, vias = derive_stack(parse_lyp(lyps[0]))
         if not metals:
+            _unstacked(rows, platform, designs,
+                       "could not derive a routing stack from %s"
+                       % os.path.basename(lyps[0]))
             continue
         for design in sorted(os.listdir(os.path.join(results, platform))):
             base = os.path.join(results, platform, design, "base")
             gds = os.path.join(base, "6_final.gds")
             if not os.path.exists(gds):
+                continue
+            gb = os.path.getsize(gds) / 1e9
+            if gb > max_gb:
+                print("  %-11s %-16s  SKIPPED (%.1f GB > --max-gb %.1f)"
+                      % (platform, design, gb, max_gb), flush=True)
+                rows.append({"platform": platform, "design": design,
+                             "shapes": None, "silica_nets": None,
+                             "klayout_nets": None, "verdict": "SKIPPED",
+                             "width_agree": False, "def_nets": None,
+                             "note": "%.1f GB" % gb})
                 continue
             rows.append(one(platform, design, gds,
                             os.path.join(base, "6_final.def"), metals, vias))
@@ -158,10 +201,22 @@ def main(flow):
                   % (r["platform"], r["design"], r["shapes"], r["silica_nets"],
                      r["klayout_nets"], r["verdict"]), flush=True)
     print()
-    ok = sum(1 for r in rows if r["verdict"] == "AGREE")
-    print("%d designs, %d agree on nets, %d agree on width"
-          % (len(rows), ok, sum(1 for r in rows if r["width_agree"])))
-    print("total shapes checked: %d" % sum(r["shapes"] or 0 for r in rows))
+    done = [r for r in rows if r["verdict"] in ("AGREE", "DISAGREE")]
+    ok = sum(1 for r in done if r["verdict"] == "AGREE")
+    print("%d designs checked, %d agree on nets, %d agree on width"
+          % (len(done), ok, sum(1 for r in done if r["width_agree"])))
+    for v in ("SKIPPED", "NO-STACK"):
+        n = sum(1 for r in rows if r["verdict"] == v)
+        if n:
+            print("%d design(s) %s -- not checked, not counted as passing"
+                  % (n, v.lower()))
+    skip = ("AGREE", "SKIPPED", "NO-STACK")
+    bad = [r for r in rows if r["verdict"] not in skip]
+    for r in bad:
+        print("  NOT AGREED: %s/%s  %s" % (r["platform"], r["design"],
+                                           r["verdict"] or r["note"]))
+    print("total shapes checked: %d"
+          % sum(r["shapes"] or 0 for r in done))
     with open("silica_validation.json", "w") as f:
         json.dump(rows, f, indent=1)
     return rows
@@ -213,6 +268,11 @@ def one(platform, design, gds, defp, metals, vias):
 
 
 if __name__ == "__main__":
-    flow = sys.argv[1] if len(sys.argv) > 1 else \
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    mg = DEFAULT_MAX_GB
+    for a in sys.argv[1:]:
+        if a.startswith("--max-gb="):
+            mg = float(a.split("=", 1)[1])
+    flow = args[0] if args else \
         os.path.expanduser("~/OpenROAD-flow-scripts/flow")
-    main(flow)
+    main(flow, mg)
