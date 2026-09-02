@@ -372,7 +372,7 @@ SILICA/
 
 | Layer | Status |
 |---|---|
-| Transform layer (language + tx + connectivity + width/space) | **implemented; 121 checks green on both backends** |
+| Transform layer (language + tx + connectivity + width/space) | **implemented; 147 checks green on all three engines** |
 | Backend protocol + pure-Python + KLayout backends | **implemented; shared conformance corpus** |
 | Strict name resolution (no silent no-op checks) | **implemented** |
 | Conditional rules (`m3.space(wide>W) >= S`) | in the grammar; **refused** until checked |

@@ -65,7 +65,7 @@ cd SILICA
 pip install -e .            # zero dependencies; add ".[klayout]" for the KLayout backend
 
 silica examples/fix_notch.sil        # run a program
-make test                            # 121 checks across 6 suites, ~10 seconds
+make test                            # 147 checks across 7 suites, ~10 seconds
 ```
 
 ## 🧨 Why SILICA exists
@@ -257,7 +257,7 @@ silica/                 the language implementation
 spec/                   language definition · grammar · invariant/field-bug map
 docs/ARCHITECTURE.md    system design & where the LLM sits (and doesn't)
 examples/               runnable programs, incl. replays of real fix classes
-tests/                  6 suites / 121 checks; conformance.py is the backend contract
+tests/                  7 suites / 147 checks; conformance.py is the backend contract
 eval/                   pre-registered evaluation plan vs. a logged campaign
 ```
 

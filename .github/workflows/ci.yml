@@ -21,6 +21,8 @@ jobs:
         run: pip install -e ".[klayout]"
       - name: Core semantics + conformance corpus (reference backend)
         run: python tests/test_core.py
+      - name: Engine differential fuzz (indexed vs simple) + scaling
+        run: python tests/test_engine.py
       - name: Language core and name strictness
         run: python tests/test_lang.py
       - name: Flow layer
