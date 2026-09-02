@@ -14,10 +14,22 @@
 *The agent proposes; the runtime disposes.*
 
 **Status: alpha.** Single author, no external users yet, no API-stability
-promise. 217 checks pass on Python 3.9–3.14 (`make test`, ~15 s, no
-dependencies). Not yet on PyPI — install from source. The CI workflow is
-committed but is not currently running on this account, so **verify locally**
-rather than trusting a badge.
+promise. Not yet on PyPI — install from source.
+
+There is no CI badge here on purpose: the workflow in `.github/workflows/` is
+committed but is not currently executing on this account, and a badge nobody
+can see run is not evidence. Check it yourself instead — it takes about fifteen
+seconds and needs nothing but Python:
+
+```bash
+git clone https://github.com/fidel-makatia/SILICA.git && cd SILICA
+make test          # 217 checks, 12 suites; exits nonzero on any failure
+```
+
+Expected tail: `ALL PASS` from each suite. Verified on Python 3.9, 3.10, 3.11,
+3.13 and 3.14. `pip install -e ".[klayout]"` adds the second backend and turns
+on the cross-backend conformance suite, which is the one that matters — it runs
+the same programs on both engines and compares verdicts.
 
 [Quick start](#-quick-start) •
 [Why](#-why-silica-exists) •
