@@ -1,0 +1,55 @@
+// An ECO on a real routed design.
+//
+// The layout is `gcd`, synthesized, placed and routed by OpenROAD on the open
+// SkyWater sky130 PDK. The layer numbers below are the REAL sky130 ones --
+// sky130 is an open PDK, so unlike everywhere else in this repository these
+// are not placeholders.
+//
+// Point the import at your own OpenROAD result and run:
+//   silica examples/sky130_eco.sil
+//
+// What this demonstrates: SILICA's connectivity extraction over a real routed
+// database agrees exactly with KLayout's own netlist extractor (712 nets from
+// 13,291 shapes for this design), and an ECO that would short two real nets is
+// refused with both net ids attached.
+
+design "gcd.gds" top gcd units nm grid 5
+
+stack {
+  metal met1 = (68,20)
+  metal met2 = (69,20)
+  metal met3 = (70,20)
+  metal met4 = (71,20)
+  metal met5 = (72,20)
+  via   via1 = (68,44) connects (met1, met2)
+  via   via2 = (69,44) connects (met2, met3)
+  via   via3 = (70,44) connects (met3, met4)
+  via   via4 = (71,44) connects (met4, met5)
+}
+
+invariants { connectivity }
+
+// NOTE: no `rules` block. Import decomposes merged polygons into rectangles,
+// and SILICA measures width per rectangle, so a slice through a wider shape
+// reads as a narrow wire and a width rule fires on clean geometry.
+// Connectivity is exact regardless of decomposition; width is not.
+// See docs/ARCHITECTURE.md, "Working on imported layout".
+
+import "6_final.gds" top gcd {
+  met1 -> (68,20)   met2 -> (69,20)   met3 -> (70,20)
+  met4 -> (71,20)   met5 -> (72,20)
+  via1 -> (68,44)   via2 -> (69,44)   via3 -> (70,44)   via4 -> (71,44)
+}
+print("routed design loaded: " + str(net_count()) + " nets on met1-met5")
+
+// Two met1 wires on different nets pass within 140 nm of each other near
+// (48000, 12900). Extending one along its own net is fine.
+tx extend_wire {
+  add met1 box(49150, 12680, 49500, 12820) on net_at(met1, 46700, 12750)
+}
+
+// The same patch, one track over: it spans the gap and joins two nets. This
+// is the edit that ships a short, and it is the one that cannot commit.
+tx patch_that_shorts {
+  add met1 box(47950, 12800, 48200, 13000) on net_at(met1, 46700, 12750)
+}

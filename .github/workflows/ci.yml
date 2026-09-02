@@ -29,6 +29,8 @@ jobs:
         run: python tests/test_effects.py
       - name: Export totality
         run: python tests/test_export.py
+      - name: Layout import round trip
+        run: python tests/test_import.py
       - name: Flow layer
         run: python tests/test_flow.py
       - name: Bug-injection benchmark (pins the published numbers)

@@ -196,6 +196,8 @@ class Parser:
                 return self.fn_decl()
             if v == "export":
                 return self.export_decl()
+            if v == "import":
+                return self.import_decl()
             if v == "let":
                 self.next()
                 name = self.expect("id")
@@ -371,6 +373,37 @@ class Parser:
             self.expect("sym", ")")
             rows.append((layer, kind, num, dtype, ln))
         return ("export", path, rows)
+
+    def import_decl(self):
+        """import "f.gds" top cell [window (a,b,c,d)] { met1 -> (68,20) ... }"""
+        self.kw("import")
+        path = self.expect("str")
+        self.kw("top")
+        top = self.expect("id")
+        shallow = self.accept("id", "shallow")
+        win = None
+        if self.accept("id", "window"):
+            self.expect("sym", "(")
+            win = [self.expr()]
+            for _ in range(3):
+                self.expect("sym", ",")
+                win.append(self.expr())
+            self.expect("sym", ")")
+        self.expect("sym", "{")
+        rows = []
+        while not self.accept("sym", "}"):
+            ln = self.line()
+            if self.peek()[0] == "eof":
+                raise self.err("unterminated import block")
+            layer = self.expect("id")
+            self.expect("sym", "->")
+            self.expect("sym", "(")
+            num = self.expect("int")
+            self.expect("sym", ",")
+            dtype = self.expect("int")
+            self.expect("sym", ")")
+            rows.append((layer, num, dtype, ln))
+        return ("import", path, top, win, rows, shallow)
 
     def inv_decl(self):
         self.kw("invariants")
@@ -624,6 +657,7 @@ class Interp:
         self.backend = design if design is not None else Design()
         self.grid, self.units = 1, "nm"
         self.top_cell = "TOP"
+        self.imported = False
         self.rules, self.invariants = [], set()
         self.metals, self.vias = set(), set()
         self.results = []
@@ -633,7 +667,11 @@ class Interp:
         builtins = {"print": print, "len": len, "str": str, "abs": abs,
                     "min": min, "max": max,
                     "range": lambda *a: list(range(*a)),
-                    "append": lambda seq, x: seq.append(x)}
+                    "append": lambda seq, x: seq.append(x),
+                    # read-only observations of the live design
+                    "net_count": lambda: self.backend.net_count(),
+                    "shape_count": lambda la: len(
+                        self.backend.shapes.get(la, []))}
         for name, f in builtins.items():
             self.genv.define(name, f)
         # a backend handed in pre-populated (tests, embedding) still declares
@@ -731,6 +769,8 @@ class Interp:
             self.eval(s[1], env)
         elif t == "export":
             self.exec_export(s[1], s[2])
+        elif t == "import":
+            self.exec_import(s[1], s[2], s[3], s[4], s[5], env)
         elif t == "tx":
             self.exec_tx(s[1], s[2], env)
         elif t == "add":
@@ -743,6 +783,38 @@ class Interp:
             self.exec_assert(s, env)
         else:
             raise ParseError("unimplemented statement %r" % t, self.cur_line)
+
+    # ---- import: what you take is declared, what you leave is reported ----
+    def exec_import(self, path, top, win, rows, shallow, env):
+        if self.txctx is not None:
+            raise ParseError("`import` is not allowed inside a tx",
+                             self.cur_line)
+        from silica import importer
+        for (layer, _n, _d, line) in rows:
+            self.cur_line = line
+            self._known_layer(layer, "import")
+        window = None
+        if win is not None:
+            window = [self.eval(e, env) for e in win]
+            self._grid(*window)
+        pairs = [(r[0], r[1], r[2]) for r in rows]
+        boxes, unmapped, dbu, cell = importer.read_layout(
+            path, top, pairs, window, shallow)
+        total = 0
+        for name, bs in boxes.items():
+            if bs:
+                self.backend.bulk_add(name, bs)
+            total += len(bs)
+        self.imported = True
+        counts = ", ".join("%s=%d" % (n, len(b))
+                           for n, b in sorted(boxes.items()) if b)
+        print("[silica import] %s cell %s%s: %d shape(s) on %d layer(s) [%s]"
+              % (path, cell, " (shallow)" if shallow else " (flattened)",
+                 total, sum(1 for b in boxes.values() if b), counts))
+        if unmapped:
+            # never silent: the design SILICA now holds is a SUBSET
+            print("[silica import] not taken (no map rule, %d layer(s)): %s"
+                  % (len(unmapped), ", ".join(unmapped)))
 
     # ---- export: artifact schemas are total ----
     def exec_export(self, path, rows):
@@ -783,6 +855,12 @@ class Interp:
                 "%s: the design holds data with no map rule: %s"
                 % (path, ", ".join(sorted(missing))))
 
+        if self.imported:
+            raise Counterexample(
+                "export", "partial-design", [], [],
+                "%s: this design was built by `import`, so it holds only the "
+                "layers that were mapped in; streaming it out would present a "
+                "subset as a whole chip" % path)
         unused = [_mapkey(k) for k in rules
                   if k[1] is None and not shapes.get(k[0])]
         n = write_gds(path, self.top_cell, shapes,

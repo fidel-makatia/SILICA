@@ -1,0 +1,51 @@
+// SILICA driving a real OpenROAD flow, stage by stage.
+//
+// OpenROAD-flow-scripts already has its own dependency tracking; what SILICA
+// adds here is a gate in front of the tools and content-hashed inputs it
+// declares itself. Adjust ORFS to your checkout and run:
+//
+//   silica --flow examples/openroad_flow.sil
+
+let ORFS = "/home/azureuser/OpenROAD-flow-scripts/flow"
+let PDK  = ORFS + "/platforms/sky130hd"
+let CFG  = ORFS + "/designs/sky130hd/aes/config.mk"
+let R    = ORFS + "/results/sky130hd/aes/base"
+let MAKE = "cd " + ORFS + " && make DESIGN_CONFIG=" + CFG + " "
+
+// ---- GATE: liberty time units must agree across every library loaded.
+// A synthesis tool that takes units from whichever library it read first turns
+// a nanosecond constraint into a microsecond one and produces hours of
+// plausible-looking garbage. Note that sky130hd ships two libraries whose
+// declared time_unit differs (1ns for the standard cells, 1ps for the dummy
+// IO library). They are not loaded together by the default flow -- only a
+// design that adds the IO library via ADDITIONAL_LIBS would load both -- but
+// the gate is what tells you that before a tool runs, not after.
+let libs = [ PDK + "/lib/sky130_fd_sc_hd__tt_025C_1v80.lib" ]
+let unit = assert_lib_units(libs)
+print("gate: liberty time units agree (" + unit + ")")
+
+step("synth", MAKE + "synth",
+     [ CFG, PDK + "/config.mk" ] + libs,
+     [ R + "/1_synth.odb", R + "/1_synth.sdc" ])
+
+step("floorplan", MAKE + "floorplan",
+     [ R + "/1_synth.odb", R + "/1_synth.sdc", CFG ],
+     [ R + "/2_floorplan.odb" ])
+
+step("place", MAKE + "place",
+     [ R + "/2_floorplan.odb", CFG ],
+     [ R + "/3_place.odb" ])
+
+step("cts", MAKE + "cts",
+     [ R + "/3_place.odb", CFG ],
+     [ R + "/4_cts.odb" ])
+
+step("route", MAKE + "route",
+     [ R + "/4_cts.odb", CFG ],
+     [ R + "/5_route.odb" ])
+
+step("final", MAKE + "final",
+     [ R + "/5_route.odb", CFG ],
+     [ R + "/6_final.gds", R + "/6_final.def" ])
+
+print("flow complete: RTL -> GDS")

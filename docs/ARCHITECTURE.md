@@ -320,6 +320,35 @@ shapes on the reference engine and one wide shape on a merging backend, and the
 same program would reach different verdicts. Coalescing removes that class of
 disagreement rather than papering over it in the corpus.
 
+## 6.1 Working on imported layout
+
+`import` reads an existing layout — an OpenROAD result, say — onto declared
+layers, and reports every layer in the file it did not take, so the subset
+SILICA holds is never a surprise. `export` then refuses to stream an imported
+design back out, because writing a subset as though it were a whole chip is the
+same class of lie as dropping an unmapped layer.
+
+Two things are worth knowing before trusting a check on imported geometry.
+
+**Connectivity is exact.** Geometry arrives as rectangles — each layer merged,
+then decomposed — and abutting rectangles are one component regardless of how
+they were cut. Validated against a real routed design: on OpenROAD's `gcd` on
+sky130 (13,291 shapes over met1–met5 and four via layers), SILICA and KLayout's
+`LayoutToNetlist` extractor independently agree on **712 nets**.
+
+**Width is not.** SILICA measures width per stored rectangle. When you author
+geometry you choose that decomposition; when you import it, the source tool
+chose it, and a band sliced across a wider shape reads as a narrow wire. On the
+same routed design a declared `met1.width >= 140` rule fires on geometry
+KLayout's own `width_check` says is clean — a false rollback, not a missed
+violation, but wrong either way.
+
+So a program working on imported layout should rely on `connectivity` and
+declare no `rules` block, which is what `examples/sky130_eco.sil` does.
+`tests/test_import.py` pins the failing case so it cannot quietly change, and
+the fix is to give `width_violation` an exact rectilinear implementation rather
+than a per-rectangle one.
+
 ## 7. Why every rule exists: the failure-class map
 
 SILICA was distilled from real multi-day agentic tapeout campaigns — commercial
@@ -372,10 +401,11 @@ SILICA/
 
 | Layer | Status |
 |---|---|
-| Transform layer (language + tx + connectivity + width/space) | **implemented; 191 checks green on all three engines** |
+| Transform layer (language + tx + connectivity + width/space) | **implemented; 206 checks green on all three engines** |
 | Backend protocol + pure-Python + KLayout backends | **implemented; shared conformance corpus** |
 | Strict name resolution (no silent no-op checks) | **implemented** |
 | Conditional rules (`m3.space(wide>W) >= S`) | in the grammar; **refused** until checked |
+| Layout import (`import`) | **implemented**; connectivity exact, width not (§6.1) |
 | Artifact totality (`export`) | **implemented**: refuses to write a design its map does not cover |
 | `ports` / `density` invariants | specified; **refused** until checked |
 | Goal layer (tactics, budgets, traces) | specified |

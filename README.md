@@ -65,7 +65,7 @@ cd SILICA
 pip install -e .            # zero dependencies; add ".[klayout]" for the KLayout backend
 
 silica examples/fix_notch.sil        # run a program
-make test                            # 191 checks across 10 suites, ~10 seconds
+make test                            # 206 checks across 11 suites, ~10 seconds
 ```
 
 ## 🧨 Why SILICA exists
@@ -199,6 +199,24 @@ that any of it is yet validated against a controlled baseline. The evaluation in
 honest third arm is a plain Python-plus-asserts wrapper, which may well capture
 most of the benefit. If it does, that is the finding.
 
+## 🔬 On a real routed chip
+
+`examples/sky130_eco.sil` runs against a real design: `gcd`, synthesized,
+placed and routed by OpenROAD on the open SkyWater **sky130** PDK. (Those layer
+numbers are real — sky130 is an open PDK.)
+
+- **Connectivity agrees with a mature extractor, exactly.** 13,291 shapes over
+  met1–met5 and four via layers; SILICA extracts **712 nets** and KLayout's
+  `LayoutToNetlist` independently extracts **712 nets**. Import takes 0.6 s.
+- **An ECO that would short two real nets is refused**, naming both:
+  `{"rule": "bridge", "nets": ["met1@46085,17395", "met1@990,23160"]}` — two
+  wires that pass within 140 nm of each other in the routed database.
+- **A limitation this found:** a declared `width` rule fires on imported
+  geometry that KLayout's own width check says is clean, because SILICA
+  measures width per stored rectangle and import chooses the decomposition.
+  Connectivity is unaffected. Documented in `docs/ARCHITECTURE.md` §6.1, pinned
+  by `tests/test_import.py`, and on the roadmap above.
+
 ## 📊 Does it actually help? (`eval/benchmark.py`)
 
 Nine bugs from the failure taxonomy, attempted three ways. An arm "caught" a
@@ -290,7 +308,7 @@ silica/                 the language implementation
 spec/                   language definition · grammar · invariant/field-bug map
 docs/ARCHITECTURE.md    system design & where the LLM sits (and doesn't)
 examples/               runnable programs, incl. replays of real fix classes
-tests/                  10 suites / 191 checks; conformance.py is the backend contract
+tests/                  11 suites / 206 checks; conformance.py is the backend contract
 eval/                   pre-registered evaluation plan vs. a logged campaign
 ```
 
@@ -307,6 +325,8 @@ eval/                   pre-registered evaluation plan vs. a logged campaign
 - [ ] goal layer: bounded tactics, budgets, replayable traces
 - [ ] evaluation budget (step limit) so an agent's runaway loop is a rollback
 - [ ] sandboxed flow steps (undeclared-input detection)
+- [x] `import`: read an OpenROAD/KLayout layout in and edit it
+- [ ] exact rectilinear width, so rules work on imported geometry
 - [ ] OpenROAD / Innovus / OpenAccess backends
 - [ ] the eval: replay a logged padframe campaign, publish rounds-to-clean
 

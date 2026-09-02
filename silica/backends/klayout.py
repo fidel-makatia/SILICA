@@ -84,6 +84,12 @@ class KLayoutBackend:
         self.top.shapes(self.layer_idx[layer]).insert(
             pya.Box(box.x1, box.y1, box.x2, box.y2))
 
+    def bulk_add(self, layer, boxes):
+        li = self.layer_idx[layer]
+        shapes = self.top.shapes(li)
+        for b in boxes:
+            shapes.insert(pya.Box(b.x1, b.y1, b.x2, b.y2))
+
     def sub(self, layer, box):
         li = self.layer_idx[layer]
         r = self._region(layer) - pya.Region(

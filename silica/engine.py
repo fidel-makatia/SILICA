@@ -79,6 +79,10 @@ class SimpleDesign:
         self._insert(layer, box)
         self._coalesce_from(layer, len(self.shapes[layer]) - 1)
 
+    def bulk_add(self, layer, boxes):
+        for b in boxes:
+            self.add(layer, b)
+
     def sub(self, layer, box):
         out = []
         for s in self.shapes.get(layer, []):
@@ -413,6 +417,18 @@ class Design:
                     for s in self._touching(m, vbox):
                         out.append(((m, s), vbox))
         return out
+
+    def bulk_add(self, layer, boxes):
+        """Insert many shapes without per-shape partition maintenance.
+
+        Import brings in geometry that some other tool already merged, so the
+        incremental bookkeeping has nothing to do but cost time; the partition
+        is rebuilt once, lazily, on the first query.
+        """
+        for b in boxes:
+            self._put(layer, b)
+        self._uf = None
+        self._key = {}
 
     def sub(self, layer, box):
         shp = self._shapes.get(layer, {})
