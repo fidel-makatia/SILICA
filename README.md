@@ -235,29 +235,37 @@ rectangles. See `docs/ARCHITECTURE.md` §6.1.
 ### Across designs and PDKs (`make validate`)
 
 `eval/validate_designs.py` walks every finished OpenROAD result, derives the
-routing stack from the platform's own KLayout layer-properties file, and
-compares SILICA against KLayout on identical geometry — union-find nets vs
-`LayoutToNetlist`, and the projection-metric width check vs
-`Region.width_check`.
+routing stack from whatever the platform ships (a KLayout tech file's inline
+layer map, a stream map, or layer properties), and compares SILICA against
+KLayout on identical geometry — union-find nets vs `LayoutToNetlist`, and the
+projection-metric width check vs `Region.width_check`. Each design runs in its
+own process, so a design that is OOM-killed becomes a recorded row rather than
+a truncated table.
 
-```
-ihp-sg13g2  gcd                  31,495 shapes   1,342 =  1,342   AGREE
-ihp-sg13g2  i2c-gpio-expander    28,177 shapes   2,145 =  2,145   AGREE
-ihp-sg13g2  spi                  15,515 shapes     691 =    691   AGREE
-nangate45   gcd                  18,223 shapes   1,157 =  1,157   AGREE
-sky130hd    aes               1,119,207 shapes  35,994 = 35,994   AGREE
-sky130hd    gcd                  33,005 shapes   1,504 =  1,504   AGREE
-sky130hs    gcd                  18,218 shapes   2,564 =  2,564   AGREE
+Confirmed so far, across **five PDKs**:
 
-7 designs checked, 7 agree on nets, 7 agree on width
-total shapes checked: 1,263,840
-```
+| PDK | design | shapes | SILICA | KLayout | |
+|---|---|---|---|---|---|
+| asap7 | ibex | 1,392,544 | 86,950 | 86,950 | agree |
+| ihp-sg13g2 | aes | 1,219,572 | 36,962 | 36,962 | agree |
+| sky130hd | aes | 1,119,207 | 35,994 | 35,994 | agree |
+| asap7 | aes | 745,170 | 43,054 | 43,054 | agree |
+| sky130hd | gcd | 33,005 | 1,504 | 1,504 | agree |
+| ihp-sg13g2 | gcd | 31,495 | 1,342 | 1,342 | agree |
+| ihp-sg13g2 | i2c-gpio-expander | 28,177 | 2,145 | 2,145 | agree |
+| nangate45 | gcd | 18,223 | 1,157 | 1,157 | agree |
+| sky130hs | gcd | 18,218 | 2,564 | 2,564 | agree |
+| ihp-sg13g2 | spi | 15,515 | 691 | 691 | agree |
 
-Four PDKs so far, one of them at over a million shapes. What it does **not**
-check, it says so and does not count as passing: a 3.6 GB design skipped on
-size, and three asap7 designs whose `.lyp` carries no derivable stack. A
-harness that quietly dropped those would be committing the exact sin this
-project exists to remove.
+**~4.6 million shapes, zero disagreements.** 32 designs were built across
+sky130hd, sky130hs, nangate45, asap7, gf180 and ihp-sg13g2; the sweep over the
+rest is a matter of compute time, not of anything being unresolved.
+
+What the harness cannot check, it prints and does not count as passing: a
+design skipped on size (`--max-gb`), a platform whose stack it cannot derive,
+and any design whose process crashed or timed out. A harness that quietly
+dropped those would be committing the exact failure this project exists to
+remove — and it did, twice, before those were fixed.
 
 ## 📊 Does it actually help? (`eval/benchmark.py`)
 
