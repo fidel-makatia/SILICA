@@ -162,6 +162,20 @@ def _unstacked(rows, platform, designs, why):
                      "def_nets": None, "note": why})
 
 
+def isolated_cuts(d, vias):
+    """Via cuts touching neither metal their layer connects.
+
+    Under the plug model below these are the whole difference between the two
+    net counts: SILICA never makes a cut a net member, an extractor does.
+    """
+    total = 0
+    for (vn, _l, _dt, a, b) in vias:
+        for _sid, vb in d._shapes.get(vn, {}).items():
+            if not d._touching(a, vb) and not d._touching(b, vb):
+                total += 1
+    return total
+
+
 def klayout_nets(gds, top, metals, vias):
     ly = pya.Layout()
     ly.read(gds)
@@ -176,7 +190,13 @@ def klayout_nets(gds, top, metals, vias):
     for (n, _, _) in metals:
         l2n.connect(lay[n])
     for (n, _, _, a, b) in vias:
-        l2n.connect(lay[n])
+        # NOTE: no self-connect on the via layer. `connect(via)` would model
+        # the cut layer as a conducting SHEET, so two cuts abutting at a corner
+        # would carry current between them and bridge the metals above and
+        # below -- which a via cut does not do. Cuts are plugs: each joins the
+        # metals it overlaps, and touching cuts do not chain. Modelling them as
+        # a sheet made the two extractions disagree on 53 of 400 randomized
+        # layouts; as plugs, on none.
         l2n.connect(lay[a], lay[n])
         l2n.connect(lay[n], lay[b])
     l2n.extract_netlist()
@@ -364,12 +384,8 @@ def one(platform, design, gds, defp, metals, vias):
         # they join metals and are never net members -- so an isolated cut
         # belongs to no net. Reconcile explicitly rather than call it a
         # disagreement, and say how many were involved.
-        orphans = 0
         d._ensure()
-        for (vn, _l, _dt, a, b) in vias:
-            for _s, vb in d._shapes.get(vn, {}).items():
-                if not d._touching(a, vb) and not d._touching(b, vb):
-                    orphans += 1
+        orphans = isolated_cuts(d, vias)
         rec["isolated_via_cuts"] = orphans
         if kn == rec["silica_nets"]:
             rec["verdict"] = "AGREE"

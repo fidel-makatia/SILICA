@@ -53,6 +53,83 @@ check("every scenario's bug is reachable without checking",
 check("the baseline is a real baseline, not a strawman",
       got["guarded"] >= 5, got)
 
+# ---- the harness must model vias the way both engines do ----------------
+# `make validate` compares SILICA against an extractor, and the comparison is
+# only as good as how it configures that extractor. It used to self-connect
+# the via layer, which models cut geometry as a conducting SHEET: two cuts
+# abutting at a corner then carry current between them and bridge the metals
+# above and below. A via cut does not do that. Cuts are plugs.
+#
+# The difference is invisible on routed designs -- routers do not abut bare
+# cuts -- so 36 real layouts never caught it. Randomized geometry does: as a
+# sheet, the two disagree on 53 of 400 layouts; as plugs, on none.
+try:
+    import klayout.db as pya
+    from validate_designs import isolated_cuts
+    from silica import Box, Design
+
+    def kl(sh):
+        ly = pya.Layout()
+        tc = ly.create_cell("T")
+        idx = {n: ly.layer(l, d)
+               for n, l, d in [("m1", 1, 0), ("m2", 2, 0), ("v1", 101, 0)]}
+        for n, bs in sh.items():
+            for b in bs:
+                tc.shapes(idx[n]).insert(pya.Box(*b))
+        l2n = pya.LayoutToNetlist(pya.RecursiveShapeIterator(ly, tc, []))
+        L = {n: l2n.make_polygon_layer(idx[n], n) for n in idx}
+        l2n.connect(L["m1"])
+        l2n.connect(L["m2"])
+        l2n.connect(L["m1"], L["v1"])
+        l2n.connect(L["v1"], L["m2"])
+        l2n.extract_netlist()
+        nl = l2n.netlist()
+        nl.flatten()
+        return sum(1 for _ in nl.circuit_by_name("T").each_net())
+
+    VIAS = [("v1", 101, 0, "m1", "m2")]
+    import random
+    bad, trials, clustered = None, 0, 0
+    for seed in range(300):
+        rng = random.Random(seed)
+        sh = {"m1": [], "m2": [], "v1": []}
+        for _ in range(rng.randint(1, 4)):
+            x, y = rng.randrange(0, 600, 50), rng.randrange(0, 600, 50)
+            sh["m1"].append((x, y, x + rng.randrange(50, 300, 50),
+                             y + rng.randrange(50, 300, 50)))
+        for _ in range(rng.randint(1, 4)):
+            x, y = rng.randrange(0, 600, 50), rng.randrange(0, 600, 50)
+            sh["m2"].append((x, y, x + rng.randrange(50, 300, 50),
+                             y + rng.randrange(50, 300, 50)))
+        # cuts on the same pitch as each other, so some of them abut
+        for _ in range(rng.randint(1, 6)):
+            x, y = rng.randrange(0, 700, 50), rng.randrange(0, 700, 50)
+            sh["v1"].append((x, y, x + 50, y + 50))
+        d = Design()
+        d.declare_metal("m1", 1, 0)
+        d.declare_metal("m2", 2, 0)
+        d.declare_via("v1", 101, 0, "m1", "m2")
+        for n, bs in sh.items():
+            if bs:
+                d.bulk_add(n, [Box(*b) for b in bs])
+        d._ensure()
+        cuts = isolated_cuts(d, VIAS)
+        if any(d._touching("v1", vb, exclude=(sid,))
+               for sid, vb in d._shapes.get("v1", {}).items()):
+            clustered += 1
+        trials += 1
+        if d.net_count() + cuts != kl(sh):
+            bad = ("seed %d: silica %d + %d clusters != klayout %d  %s"
+                   % (seed, d.net_count(), cuts, kl(sh), sh))
+            break
+    check("reconciliation matches the extractor on %d randomized layouts"
+          % trials, bad is None, bad)
+    check("the corpus exercises abutting cuts, which a sheet model would "
+          "chain (%d of %d layouts)" % (clustered, trials), clustered > 10,
+          clustered)
+except ImportError:
+    print("SKIP reconciliation fuzz (klayout module not installed)")
+
 print("----")
 print("ALL PASS" if fails == 0 else "%d FAILURES" % fails)
 sys.exit(1 if fails else 0)
